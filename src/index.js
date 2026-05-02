@@ -5,22 +5,21 @@ const pool = require('./db')
 const authRoutes = require('./auth')
 const meetingRoutes = require('./meetings')
 const scheduleRoutes = require('./schedule')
+const bookingRoutes = require('./bookings')
 
 const app = express()
 app.use(cors())
 app.use(express.json())
 
-// Роуты
 app.use('/auth', authRoutes)
 app.use('/meetings', meetingRoutes)
 app.use('/schedule', scheduleRoutes)
+app.use('/bookings', bookingRoutes)
 
-// Проверка что сервер работает
 app.get('/', (req, res) => {
   res.json({ message: 'kogDA API работает!' })
 })
 
-// Проверка базы данных
 app.get('/health', async (req, res) => {
   try {
     await pool.query('SELECT NOW()')
