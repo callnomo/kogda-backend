@@ -4,6 +4,7 @@ const cors = require('cors')
 const pool = require('./db')
 const authRoutes = require('./auth')
 const meetingRoutes = require('./meetings')
+const scheduleRoutes = require('./schedule')
 
 const app = express()
 app.use(cors())
@@ -12,10 +13,11 @@ app.use(express.json())
 // Роуты
 app.use('/auth', authRoutes)
 app.use('/meetings', meetingRoutes)
+app.use('/schedule', scheduleRoutes)
 
 // Проверка что сервер работает
 app.get('/', (req, res) => {
-  res.json({ message: 'kogDA API работает! 🚀' })
+  res.json({ message: 'kogDA API работает!' })
 })
 
 // Проверка базы данных
