@@ -1,0 +1,32 @@
+require('dotenv').config()
+const express = require('express')
+const cors = require('cors')
+const pool = require('./db')
+const authRoutes = require('./auth')
+
+const app = express()
+app.use(cors())
+app.use(express.json())
+
+// Роуты
+app.use('/auth', authRoutes)
+
+// Проверка что сервер работает
+app.get('/', (req, res) => {
+  res.json({ message: 'kogDA API работает! 🚀' })
+})
+
+// Проверка базы данных
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT NOW()')
+    res.json({ status: 'ok', db: 'connected' })
+  } catch (err) {
+    res.status(500).json({ status: 'error', db: 'disconnected' })
+  }
+})
+
+const PORT = process.env.PORT || 3000
+app.listen(PORT, () => {
+  console.log(`kogDA сервер запущен на порту ${PORT}`)
+})
