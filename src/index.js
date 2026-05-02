@@ -3,6 +3,7 @@ const express = require('express')
 const cors = require('cors')
 const pool = require('./db')
 const authRoutes = require('./auth')
+const meetingRoutes = require('./meetings')
 
 const app = express()
 app.use(cors())
@@ -10,6 +11,7 @@ app.use(express.json())
 
 // Роуты
 app.use('/auth', authRoutes)
+app.use('/meetings', meetingRoutes)
 
 // Проверка что сервер работает
 app.get('/', (req, res) => {
