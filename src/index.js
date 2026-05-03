@@ -7,6 +7,9 @@ const meetingRoutes = require('./meetings')
 const scheduleRoutes = require('./schedule')
 const bookingRoutes = require('./bookings')
 
+// Запускаем cron jobs
+require('./cron')
+
 const app = express()
 app.use(cors())
 app.use(express.json())
