@@ -44,7 +44,7 @@ async function migrate() {
         notes TEXT,
         start_time TIMESTAMP NOT NULL,
         end_time TIMESTAMP NOT NULL,
-        status VARCHAR(50) DEFAULT 'pending',
+        status VARCHAR(50) DEFAULT 'confirmed',
         video_link VARCHAR(500),
         created_at TIMESTAMP DEFAULT NOW()
       )
@@ -70,6 +70,21 @@ async function migrate() {
         reason VARCHAR(255)
       )
     `)
+
+    // Гибкое расписание - конкретные даты и слоты
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS flexible_schedule (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        date DATE NOT NULL,
+        start_time VARCHAR(5) NOT NULL,
+        end_time VARCHAR(5) NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `)
+
+    // Тип расписания для пользователя
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS schedule_type VARCHAR(20) DEFAULT 'standard'`)
 
     console.log('Все таблицы созданы!')
     process.exit(0)
