@@ -3,7 +3,6 @@ const router = express.Router()
 const pool = require('./db')
 const jwt = require('jsonwebtoken')
 
-// Middleware для проверки токена
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
   if (!token) return res.status(401).json({ error: 'No token' })
@@ -16,7 +15,6 @@ const auth = (req, res, next) => {
   }
 }
 
-// Получить все типы встреч пользователя
 router.get('/', auth, async (req, res) => {
   try {
     const result = await pool.query(
@@ -29,7 +27,6 @@ router.get('/', auth, async (req, res) => {
   }
 })
 
-// Создать тип встречи
 router.post('/', auth, async (req, res) => {
   const { title, description, duration, price, currency } = req.body
   try {
@@ -43,7 +40,19 @@ router.post('/', auth, async (req, res) => {
   }
 })
 
-// Удалить тип встречи
+router.patch('/:id', auth, async (req, res) => {
+  const { title, description, duration, price } = req.body
+  try {
+    const result = await pool.query(
+      'UPDATE meeting_types SET title=$1, description=$2, duration=$3, price=$4 WHERE id=$5 AND user_id=$6 RETURNING *',
+      [title, description, duration, price, req.params.id, req.userId]
+    )
+    res.json(result.rows[0])
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 router.delete('/:id', auth, async (req, res) => {
   try {
     await pool.query(
@@ -56,16 +65,13 @@ router.delete('/:id', auth, async (req, res) => {
   }
 })
 
-// Публичная страница пользователя
 router.get('/public/:slug', async (req, res) => {
   try {
     const user = await pool.query(
       'SELECT id, name, bio, avatar, slug FROM users WHERE slug = $1',
       [req.params.slug]
     )
-    if (user.rows.length === 0) {
-      return res.status(404).json({ error: 'Not found' })
-    }
+    if (user.rows.length === 0) return res.status(404).json({ error: 'Not found' })
     const meetings = await pool.query(
       'SELECT * FROM meeting_types WHERE user_id = $1 AND is_active = true',
       [user.rows[0].id]
