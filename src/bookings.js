@@ -2,6 +2,7 @@ const express = require('express')
 const router = express.Router()
 const pool = require('./db')
 const jwt = require('jsonwebtoken')
+const { notifyNewBooking } = require('./telegram')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -15,7 +16,7 @@ const auth = (req, res, next) => {
   }
 }
 
-// Создать бронирование (публичный роут для клиентов)
+// Создать бронирование
 router.post('/', async (req, res) => {
   const { meeting_type_id, client_name, client_email, notes, date, time } = req.body
   try {
@@ -30,13 +31,15 @@ router.post('/', async (req, res) => {
 
     const startTime = new Date(`${date}T${time}:00`)
     const endTime = new Date(startTime.getTime() + meeting.duration * 60000)
-
     const videoLink = `https://meet.jit.si/kogda-${meeting_type_id}-${Date.now()}`
 
     const result = await pool.query(
       'INSERT INTO bookings (meeting_type_id, client_name, client_email, notes, start_time, end_time, status, video_link) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *',
       [meeting_type_id, client_name, client_email, notes, startTime, endTime, 'confirmed', videoLink]
     )
+
+    // Отправляем уведомление в Telegram
+    notifyNewBooking(result.rows[0], meeting.title, client_name, client_email, date, time)
 
     res.json({ booking: result.rows[0], video_link: videoLink })
   } catch (err) {
