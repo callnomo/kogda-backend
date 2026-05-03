@@ -51,6 +51,7 @@ async function migrate() {
     await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS min_notice INTEGER DEFAULT 0`)
     await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS max_days_ahead INTEGER DEFAULT 60`)
     await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS max_per_day INTEGER DEFAULT 0`)
+    await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS require_confirm BOOLEAN DEFAULT false`)
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS bookings (

@@ -32,25 +32,29 @@ router.post('/', async (req, res) => {
     if (meetingResult.rows.length === 0) return res.status(404).json({ error: 'Meeting type not found' })
     const meeting = meetingResult.rows[0]
 
+    const requireConfirm = meeting.require_confirm || false
     const startTime = new Date(`${date}T${time}:00`)
     const endTime = new Date(startTime.getTime() + meeting.duration * 60000)
     const videoLink = `https://meet.jit.si/kogda-${meeting_type_id}-${Date.now()}`
     const clientToken = crypto.randomBytes(20).toString('hex')
 
+    const bookingStatus = requireConfirm ? 'pending' : 'confirmed'
     const result = await pool.query(
       `INSERT INTO bookings 
        (meeting_type_id, client_name, client_email, notes, start_time, end_time, status, video_link, client_token) 
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [meeting_type_id, client_name, client_email, notes, startTime, endTime, 'confirmed', videoLink, clientToken]
+      [meeting_type_id, client_name, client_email, notes, startTime, endTime, bookingStatus, videoLink, clientToken]
     )
 
     const booking = result.rows[0]
 
     // Telegram уведомление коучу
-    notifyNewBooking(booking, meeting.title, client_name, client_email, date, time, meeting.user_id)
+    notifyNewBooking(booking, meeting.title, client_name, client_email, date, time, meeting.user_id, requireConfirm)
 
-    // Email клиенту с ссылкой на управление бронью
-    sendBookingConfirmation(client_email, client_name, meeting.title, date, time, videoLink, meeting.expert_name, clientToken)
+    // Email клиенту — только если не требует подтверждения
+    if (!requireConfirm) {
+      sendBookingConfirmation(client_email, client_name, meeting.title, date, time, videoLink, meeting.expert_name, clientToken)
+    }
 
     res.json({ booking, video_link: videoLink })
   } catch (err) {
