@@ -21,6 +21,12 @@ async function migrate() {
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(255)`)
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_token VARCHAR(255)`)
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS schedule_type VARCHAR(20) DEFAULT 'standard'`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_telegram BOOLEAN DEFAULT true`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_email BOOLEAN DEFAULT true`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_whatsapp BOOLEAN DEFAULT false`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_max BOOLEAN DEFAULT false`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp_phone VARCHAR(50)`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS max_phone VARCHAR(50)`)
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS meeting_types (

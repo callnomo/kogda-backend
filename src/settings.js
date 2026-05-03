@@ -16,11 +16,14 @@ const auth = (req, res, next) => {
   }
 }
 
-// Получить настройки пользователя
+// Получить настройки
 router.get('/', auth, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, name, email, slug, bio, avatar, telegram_chat_id FROM users WHERE id = $1',
+      `SELECT id, name, email, slug, bio, avatar, telegram_chat_id,
+       notify_telegram, notify_email, notify_whatsapp, notify_max,
+       whatsapp_phone, max_phone
+       FROM users WHERE id = $1`,
       [req.userId]
     )
     res.json(result.rows[0])
@@ -29,14 +32,11 @@ router.get('/', auth, async (req, res) => {
   }
 })
 
-// Генерировать токен для подключения Telegram
+// Генерировать токен для Telegram
 router.post('/telegram/token', auth, async (req, res) => {
   try {
     const token = crypto.randomBytes(16).toString('hex')
-    await pool.query(
-      'UPDATE users SET telegram_token = $1 WHERE id = $2',
-      [token, req.userId]
-    )
+    await pool.query('UPDATE users SET telegram_token = $1 WHERE id = $2', [token, req.userId])
     const botUsername = 'kogdaapp_bot'
     const telegramLink = `https://t.me/${botUsername}?start=${token}`
     res.json({ token, link: telegramLink })
@@ -54,15 +54,31 @@ router.patch('/profile', auth, async (req, res) => {
         'SELECT id FROM users WHERE slug = $1 AND id != $2',
         [slug, req.userId]
       )
-      if (exists.rows.length > 0) {
-        return res.status(400).json({ error: 'Этот никнейм уже занят' })
-      }
+      if (exists.rows.length > 0) return res.status(400).json({ error: 'Этот никнейм уже занят' })
     }
     const result = await pool.query(
       'UPDATE users SET name = COALESCE($1, name), bio = COALESCE($2, bio), slug = COALESCE($3, slug) WHERE id = $4 RETURNING id, name, email, slug, bio',
       [name, bio, slug, req.userId]
     )
     res.json(result.rows[0])
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Обновить настройки уведомлений
+router.patch('/notifications', auth, async (req, res) => {
+  const { notify_telegram, notify_email, notify_whatsapp, notify_max, whatsapp_phone, max_phone } = req.body
+  try {
+    await pool.query(
+      `UPDATE users SET 
+       notify_telegram = $1, notify_email = $2, 
+       notify_whatsapp = $3, notify_max = $4,
+       whatsapp_phone = $5, max_phone = $6
+       WHERE id = $7`,
+      [notify_telegram, notify_email, notify_whatsapp, notify_max, whatsapp_phone, max_phone, req.userId]
+    )
+    res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: 'Server error' })
   }
