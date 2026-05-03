@@ -2,7 +2,8 @@ const express = require('express')
 const router = express.Router()
 const pool = require('./db')
 const jwt = require('jsonwebtoken')
-const { notifyNewBooking } = require('./telegram')
+const { notifyNewBooking, notifyBookingCancelled } = require('./telegram')
+const { sendBookingConfirmation } = require('./email')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -21,7 +22,10 @@ router.post('/', async (req, res) => {
   const { meeting_type_id, client_name, client_email, notes, date, time } = req.body
   try {
     const meetingResult = await pool.query(
-      'SELECT * FROM meeting_types WHERE id = $1',
+      `SELECT mt.*, u.name as expert_name 
+       FROM meeting_types mt 
+       JOIN users u ON mt.user_id = u.id 
+       WHERE mt.id = $1`,
       [meeting_type_id]
     )
     if (meetingResult.rows.length === 0) {
@@ -38,10 +42,15 @@ router.post('/', async (req, res) => {
       [meeting_type_id, client_name, client_email, notes, startTime, endTime, 'confirmed', videoLink]
     )
 
-    // Отправляем уведомление в Telegram
-    notifyNewBooking(result.rows[0], meeting.title, client_name, client_email, date, time)
+    const booking = result.rows[0]
 
-    res.json({ booking: result.rows[0], video_link: videoLink })
+    // Telegram уведомление коучу
+    notifyNewBooking(booking, meeting.title, client_name, client_email, date, time)
+
+    // Email подтверждение клиенту
+    sendBookingConfirmation(client_email, client_name, meeting.title, date, time, videoLink, meeting.expert_name)
+
+    res.json({ booking, video_link: videoLink })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
@@ -68,6 +77,20 @@ router.get('/', auth, async (req, res) => {
 // Отменить бронь
 router.patch('/:id/cancel', auth, async (req, res) => {
   try {
+    const bookingResult = await pool.query(
+      `SELECT b.*, mt.title as meeting_title
+       FROM bookings b
+       JOIN meeting_types mt ON b.meeting_type_id = mt.id
+       WHERE b.id = $1`,
+      [req.params.id]
+    )
+    if (bookingResult.rows.length > 0) {
+      const booking = bookingResult.rows[0]
+      const date = new Date(booking.start_time).toLocaleDateString('ru-RU')
+      const time = new Date(booking.start_time).toTimeString().slice(0, 5)
+      notifyBookingCancelled(booking.client_name, booking.meeting_title, date, time)
+    }
+
     await pool.query(
       'UPDATE bookings SET status = $1 WHERE id = $2',
       ['cancelled', req.params.id]
