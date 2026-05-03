@@ -1,4 +1,6 @@
-const TelegramBot = require('node-telegram-bot-api')
+const bot = process.env.TELEGRAM_BOT_TOKEN
+  ? new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: { autoStart: true, params: { timeout: 10 } } })
+  : null
 const pool = require('./db')
 
 const bot = process.env.TELEGRAM_BOT_TOKEN
