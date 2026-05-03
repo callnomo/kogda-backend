@@ -136,6 +136,32 @@ router.post('/client/:token/cancel', async (req, res) => {
   }
 })
 
+// Коуч подтверждает новую бронь
+router.patch("/:id/confirm", auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE bookings SET status = $1 WHERE id = $2 RETURNING *",
+      ["confirmed", req.params.id]
+    )
+    if (result.rows.length > 0) {
+      const booking = result.rows[0]
+      const meetingResult = await pool.query(
+        "SELECT mt.title, u.name as expert_name FROM meeting_types mt JOIN users u ON mt.user_id = u.id WHERE mt.id = $1",
+        [booking.meeting_type_id]
+      )
+      if (meetingResult.rows.length > 0) {
+        const { sendBookingConfirmation } = require("./email")
+        const date = new Date(booking.start_time).toISOString().split("T")[0]
+        const time = new Date(booking.start_time).toTimeString().slice(0, 5)
+        sendBookingConfirmation(booking.client_email, booking.client_name, meetingResult.rows[0].title, date, time, booking.video_link, meetingResult.rows[0].expert_name, booking.client_token)
+      }
+    }
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: "Server error" })
+  }
+})
+
 // Коуч подтверждает перенос
 router.patch('/:id/confirm-reschedule', auth, async (req, res) => {
   try {
