@@ -6,6 +6,7 @@ const authRoutes = require('./auth')
 const meetingRoutes = require('./meetings')
 const scheduleRoutes = require('./schedule')
 const bookingRoutes = require('./bookings')
+const settingsRoutes = require('./settings')
 
 // Запускаем cron jobs
 require('./cron')
@@ -18,6 +19,7 @@ app.use('/auth', authRoutes)
 app.use('/meetings', meetingRoutes)
 app.use('/schedule', scheduleRoutes)
 app.use('/bookings', bookingRoutes)
+app.use('/settings', settingsRoutes)
 
 app.get('/', (req, res) => {
   res.json({ message: 'kogDA API работает!' })

@@ -3,7 +3,6 @@ const pool = require('./db')
 
 async function migrate() {
   try {
-    // Таблица пользователей
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -13,11 +12,14 @@ async function migrate() {
         slug VARCHAR(255) UNIQUE NOT NULL,
         bio TEXT,
         avatar VARCHAR(255),
+        telegram_chat_id VARCHAR(255),
+        telegram_token VARCHAR(255),
         created_at TIMESTAMP DEFAULT NOW()
       )
     `)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(255)`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_token VARCHAR(255)`)
 
-    // Таблица типов встреч
     await pool.query(`
       CREATE TABLE IF NOT EXISTS meeting_types (
         id SERIAL PRIMARY KEY,
@@ -32,7 +34,6 @@ async function migrate() {
       )
     `)
 
-    // Таблица бронирований
     await pool.query(`
       CREATE TABLE IF NOT EXISTS bookings (
         id SERIAL PRIMARY KEY,
@@ -43,13 +44,12 @@ async function migrate() {
         notes TEXT,
         start_time TIMESTAMP NOT NULL,
         end_time TIMESTAMP NOT NULL,
-        status VARCHAR(50) DEFAULT 'confirmed',
+        status VARCHAR(50) DEFAULT 'pending',
         video_link VARCHAR(500),
         created_at TIMESTAMP DEFAULT NOW()
       )
     `)
 
-    // Таблица расписания
     await pool.query(`
       CREATE TABLE IF NOT EXISTS schedules (
         id SERIAL PRIMARY KEY,
@@ -61,7 +61,6 @@ async function migrate() {
       )
     `)
 
-    // Таблица исключений
     await pool.query(`
       CREATE TABLE IF NOT EXISTS schedule_overrides (
         id SERIAL PRIMARY KEY,
