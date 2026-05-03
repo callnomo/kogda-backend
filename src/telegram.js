@@ -132,9 +132,25 @@ ${list}
   `)
 }
 
+// Запрос на перенос от клиента
+const notifyRescheduleRequest = async (clientName, meetingTitle, newDate, newTime, bookingId, userId) => {
+  const chatId = await getUserChatId(userId)
+  await sendToUser(chatId, `
+🔄 <b>Запрос на перенос!</b>
+
+👤 <b>Клиент:</b> ${clientName}
+📅 <b>Встреча:</b> ${meetingTitle}
+🗓 <b>Новая дата:</b> ${newDate}
+⏰ <b>Новое время:</b> ${newTime}
+
+Подтвердите или отклоните в разделе Записи.
+  `)
+}
+
 module.exports = {
   notifyNewBooking,
   notifyBookingCancelled,
+  notifyRescheduleRequest,
   notifyReminder24h,
   notifyReminder1h,
   notifyDailySummary

@@ -28,11 +28,14 @@ router.get('/', auth, async (req, res) => {
 })
 
 router.post('/', auth, async (req, res) => {
-  const { title, description, duration, price, currency } = req.body
+  const { title, description, duration, price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day } = req.body
   try {
     const result = await pool.query(
-      'INSERT INTO meeting_types (user_id, title, description, duration, price, currency) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [req.userId, title, description, duration, price || 0, currency || 'RUB']
+      `INSERT INTO meeting_types 
+       (user_id, title, description, duration, price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      [req.userId, title, description, duration, price || 0, currency || 'RUB',
+       buffer_before || 0, buffer_after || 0, min_notice || 0, max_days_ahead || 60, max_per_day || 0]
     )
     res.json(result.rows[0])
   } catch (err) {
@@ -41,11 +44,15 @@ router.post('/', auth, async (req, res) => {
 })
 
 router.patch('/:id', auth, async (req, res) => {
-  const { title, description, duration, price } = req.body
+  const { title, description, duration, price, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day } = req.body
   try {
     const result = await pool.query(
-      'UPDATE meeting_types SET title=$1, description=$2, duration=$3, price=$4 WHERE id=$5 AND user_id=$6 RETURNING *',
-      [title, description, duration, price, req.params.id, req.userId]
+      `UPDATE meeting_types SET 
+       title=$1, description=$2, duration=$3, price=$4,
+       buffer_before=$5, buffer_after=$6, min_notice=$7, max_days_ahead=$8, max_per_day=$9
+       WHERE id=$10 AND user_id=$11 RETURNING *`,
+      [title, description, duration, price, buffer_before || 0, buffer_after || 0,
+       min_notice || 0, max_days_ahead || 60, max_per_day || 0, req.params.id, req.userId]
     )
     res.json(result.rows[0])
   } catch (err) {

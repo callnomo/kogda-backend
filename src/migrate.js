@@ -14,11 +14,13 @@ async function migrate() {
         avatar VARCHAR(255),
         telegram_chat_id VARCHAR(255),
         telegram_token VARCHAR(255),
+        schedule_type VARCHAR(20) DEFAULT 'standard',
         created_at TIMESTAMP DEFAULT NOW()
       )
     `)
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id VARCHAR(255)`)
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_token VARCHAR(255)`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS schedule_type VARCHAR(20) DEFAULT 'standard'`)
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS meeting_types (
@@ -30,9 +32,19 @@ async function migrate() {
         price INTEGER DEFAULT 0,
         currency VARCHAR(10) DEFAULT 'RUB',
         is_active BOOLEAN DEFAULT true,
+        buffer_before INTEGER DEFAULT 0,
+        buffer_after INTEGER DEFAULT 0,
+        min_notice INTEGER DEFAULT 0,
+        max_days_ahead INTEGER DEFAULT 60,
+        max_per_day INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT NOW()
       )
     `)
+    await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS buffer_before INTEGER DEFAULT 0`)
+    await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS buffer_after INTEGER DEFAULT 0`)
+    await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS min_notice INTEGER DEFAULT 0`)
+    await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS max_days_ahead INTEGER DEFAULT 60`)
+    await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS max_per_day INTEGER DEFAULT 0`)
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS bookings (
@@ -46,9 +58,15 @@ async function migrate() {
         end_time TIMESTAMP NOT NULL,
         status VARCHAR(50) DEFAULT 'confirmed',
         video_link VARCHAR(500),
+        client_token VARCHAR(255),
+        reschedule_request TIMESTAMP,
+        reschedule_time TIMESTAMP,
         created_at TIMESTAMP DEFAULT NOW()
       )
     `)
+    await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS client_token VARCHAR(255)`)
+    await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS reschedule_request TIMESTAMP`)
+    await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS reschedule_time TIMESTAMP`)
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS schedules (
@@ -71,7 +89,6 @@ async function migrate() {
       )
     `)
 
-    // Гибкое расписание - конкретные даты и слоты
     await pool.query(`
       CREATE TABLE IF NOT EXISTS flexible_schedule (
         id SERIAL PRIMARY KEY,
@@ -82,9 +99,6 @@ async function migrate() {
         created_at TIMESTAMP DEFAULT NOW()
       )
     `)
-
-    // Тип расписания для пользователя
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS schedule_type VARCHAR(20) DEFAULT 'standard'`)
 
     console.log('Все таблицы созданы!')
     process.exit(0)
