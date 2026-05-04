@@ -4,7 +4,7 @@ const pool = require('./db')
 const jwt = require('jsonwebtoken')
 const crypto = require('crypto')
 const { notifyNewBooking, notifyBookingCancelled, notifyRescheduleRequest } = require('./telegram')
-const { sendBookingConfirmation } = require('./email')
+const { sendBookingConfirmation, sendCoachNotification } = require('./email')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -62,6 +62,16 @@ router.post('/', async (req, res) => {
 
     // Telegram уведомление коучу
     notifyNewBooking(booking, meeting.title, client_name, client_email, date, time, meeting.user_id, requireConfirm)
+
+    // Email коучу если включено в настройках
+    const coachResult = await pool.query(
+      'SELECT email, name, notify_email FROM users WHERE id = $1',
+      [meeting.user_id]
+    )
+    if (coachResult.rows.length > 0 && coachResult.rows[0].notify_email) {
+      const coach = coachResult.rows[0]
+      sendCoachNotification(coach.email, coach.name, client_name, client_email, meeting.title, date, time, booking.id, requireConfirm)
+    }
 
     // Email клиенту — только если не требует подтверждения
     if (!requireConfirm) {

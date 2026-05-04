@@ -128,4 +128,77 @@ const sendReminder = async (clientEmail, clientName, meetingTitle, date, time, v
   }
 }
 
-module.exports = { sendBookingConfirmation, sendReminder }
+module.exports = { sendBookingConfirmation, sendReminder, sendCoachNotification }
+
+async function sendCoachNotification(coachEmail, coachName, clientName, clientEmail, meetingTitle, date, time, bookingId, requireConfirm) {
+  const appUrl = 'https://app.kogda.app'
+  const confirmUrl = `${appUrl}/bookings`
+  try {
+    await resend.emails.send({
+      from: 'kogDA <noreply@kogda.app>',
+      to: coachEmail,
+      subject: requireConfirm ? `Новая заявка от ${clientName} — требует подтверждения` : `Новая запись от ${clientName}`,
+      html: `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;padding:0 20px;">
+    <div style="text-align:center;margin-bottom:32px;">
+      <span style="font-size:24px;font-weight:800;color:#111;">kog</span>
+      <span style="background:#E8FF47;padding:2px 8px;border-radius:6px;font-size:24px;font-weight:800;color:#111;">DA</span>
+    </div>
+    <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
+      <div style="width:56px;height:56px;background:#E8FF47;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;text-align:center;line-height:56px;font-size:24px;">
+        ${requireConfirm ? '⏳' : '🎉'}
+      </div>
+      <h1 style="text-align:center;font-size:22px;font-weight:800;color:#111;margin:0 0 8px;">
+        ${requireConfirm ? 'Новая заявка!' : 'Новая запись!'}
+      </h1>
+      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 28px;">
+        Привет, ${coachName}! ${requireConfirm ? 'Клиент хочет записаться — подтверди или отклони.' : 'К тебе записался новый клиент.'}
+      </p>
+      <div style="background:#F7F6F1;border-radius:16px;padding:24px;margin-bottom:24px;">
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Клиент</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${clientName}</div>
+          <div style="font-size:13px;color:#888;">${clientEmail}</div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Встреча</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${meetingTitle}</div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Дата и время</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${formatDate(date)} в ${time}</div>
+        </div>
+      </div>
+      ${requireConfirm ? `
+      <a href="${confirmUrl}" style="display:block;background:#111;color:#fff;text-align:center;padding:16px;border-radius:12px;font-size:16px;font-weight:800;text-decoration:none;margin-bottom:12px;">
+        Подтвердить или отклонить →
+      </a>
+      ` : `
+      <a href="${confirmUrl}" style="display:block;background:#F7F6F1;color:#111;text-align:center;padding:14px;border-radius:12px;font-size:14px;font-weight:600;text-decoration:none;">
+        Посмотреть все записи →
+      </a>
+      `}
+    </div>
+    <div style="text-align:center;margin-top:24px;">
+      <p style="color:#aaa;font-size:12px;">
+        <span style="font-weight:800;color:#111;">kog</span>
+        <span style="background:#E8FF47;padding:0 4px;border-radius:3px;font-weight:800;color:#111;">DA</span>
+      </p>
+    </div>
+  </div>
+</body>
+</html>
+      `
+    })
+    console.log('Coach email отправлен:', coachEmail)
+  } catch (err) {
+    console.error('Coach email error:', err.message)
+  }
+}
