@@ -38,10 +38,7 @@ router.post('/type', auth, async (req, res) => {
 
 router.get('/', auth, async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM schedules WHERE user_id = $1 ORDER BY day_of_week',
-      [req.userId]
-    )
+    const result = await pool.query('SELECT * FROM schedules WHERE user_id = $1 ORDER BY day_of_week', [req.userId])
     res.json(result.rows)
   } catch (err) {
     res.status(500).json({ error: 'Server error' })
@@ -100,6 +97,45 @@ router.delete('/flexible/:id', auth, async (req, res) => {
   }
 })
 
+// Получить исключения дат
+router.get('/overrides', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM schedule_overrides WHERE user_id = $1 AND date >= CURRENT_DATE ORDER BY date',
+      [req.userId]
+    )
+    res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Добавить исключение даты (закрыть день)
+router.post('/overrides', auth, async (req, res) => {
+  const { date, is_available, reason } = req.body
+  try {
+    // Удаляем если уже есть
+    await pool.query('DELETE FROM schedule_overrides WHERE user_id = $1 AND date = $2', [req.userId, date])
+    const result = await pool.query(
+      'INSERT INTO schedule_overrides (user_id, date, is_available, reason) VALUES ($1, $2, $3, $4) RETURNING *',
+      [req.userId, date, is_available ?? false, reason || null]
+    )
+    res.json(result.rows[0])
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Удалить исключение (восстановить день)
+router.delete('/overrides/:id', auth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM schedule_overrides WHERE id = $1 AND user_id = $2', [req.params.id, req.userId])
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 // Получить доступные слоты для клиента
 router.get('/slots/:slug', async (req, res) => {
   const { date, meeting_type_id, timezone } = req.query
@@ -111,67 +147,90 @@ router.get('/slots/:slug', async (req, res) => {
     const scheduleType = userResult.rows[0].schedule_type || 'standard'
     const clientTz = timezone || 'UTC'
 
-    // Получаем параметры услуги
+    // Параметры услуги
     let duration = 60
     let bufferBefore = 0
     let bufferAfter = 0
+    let minNotice = 0   // часов до записи
+    let maxPerDay = 0   // макс встреч в день (0 = без лимита)
 
     if (meeting_type_id) {
       const mtResult = await pool.query(
-        'SELECT duration, buffer_before, buffer_after FROM meeting_types WHERE id = $1',
+        'SELECT duration, buffer_before, buffer_after, min_notice, max_per_day FROM meeting_types WHERE id = $1',
         [meeting_type_id]
       )
       if (mtResult.rows.length > 0) {
         duration = mtResult.rows[0].duration
         bufferBefore = mtResult.rows[0].buffer_before || 0
         bufferAfter = mtResult.rows[0].buffer_after || 0
+        minNotice = mtResult.rows[0].min_notice || 0
+        maxPerDay = mtResult.rows[0].max_per_day || 0
       }
     }
 
-    // Текущее время в часовом поясе клиента (в минутах от начала дня)
+    // Текущее время в часовом поясе клиента
     const nowInClientTz = new Date(new Date().toLocaleString('en-US', { timeZone: clientTz }))
-    const todayInClientTz = nowInClientTz.toISOString().split('T')[0]
+    const todayInClientTz = `${nowInClientTz.getFullYear()}-${String(nowInClientTz.getMonth()+1).padStart(2,'0')}-${String(nowInClientTz.getDate()).padStart(2,'0')}`
     const isToday = date === todayInClientTz
     const nowMinutes = nowInClientTz.getHours() * 60 + nowInClientTz.getMinutes()
+    const minNoticeMinutes = minNotice * 60
 
-    // Получаем все активные брони на этот день
-    // Конвертируем start_time/end_time в часовой пояс клиента
+    // Проверяем исключение для этой даты
+    const overrideResult = await pool.query(
+      'SELECT * FROM schedule_overrides WHERE user_id = $1 AND date = $2',
+      [userId, date]
+    )
+    if (overrideResult.rows.length > 0 && !overrideResult.rows[0].is_available) {
+      return res.json({ slots: [], day: DAYS[new Date(date + 'T12:00:00').getDay()], closed: true })
+    }
+
+    // Все активные брони коуча (для подсчёта занятости)
     const bookingsResult = await pool.query(
       `SELECT b.start_time, b.end_time, mt.buffer_before, mt.buffer_after
        FROM bookings b
        JOIN meeting_types mt ON b.meeting_type_id = mt.id
-       WHERE mt.user_id = $1 
-       AND b.status != 'cancelled'`,
+       WHERE mt.user_id = $1 AND b.status != 'cancelled'`,
       [userId]
     )
 
-    // Фильтруем брони которые попадают на нужный день в часовом поясе клиента
-    const busyRanges = bookingsResult.rows
-      .filter(b => {
-        const startInClientTz = new Date(new Date(b.start_time).toLocaleString('en-US', { timeZone: clientTz }))
-        const bookingDate = `${startInClientTz.getFullYear()}-${String(startInClientTz.getMonth()+1).padStart(2,'0')}-${String(startInClientTz.getDate()).padStart(2,'0')}`
-        return bookingDate === date
-      })
-      .map(b => {
-        const startInClientTz = new Date(new Date(b.start_time).toLocaleString('en-US', { timeZone: clientTz }))
-        const endInClientTz = new Date(new Date(b.end_time).toLocaleString('en-US', { timeZone: clientTz }))
-        const bBefore = b.buffer_before || 0
-        const bAfter = b.buffer_after || 0
-        return {
-          from: startInClientTz.getHours() * 60 + startInClientTz.getMinutes() - bBefore,
-          to: endInClientTz.getHours() * 60 + endInClientTz.getMinutes() + bAfter
-        }
-      })
+    // Брони на этот день в часовом поясе клиента
+    const dayBookings = bookingsResult.rows.filter(b => {
+      const startInClientTz = new Date(new Date(b.start_time).toLocaleString('en-US', { timeZone: clientTz }))
+      const bookingDate = `${startInClientTz.getFullYear()}-${String(startInClientTz.getMonth()+1).padStart(2,'0')}-${String(startInClientTz.getDate()).padStart(2,'0')}`
+      return bookingDate === date
+    })
+
+    // Проверка макс встреч в день
+    if (maxPerDay > 0 && dayBookings.length >= maxPerDay) {
+      return res.json({ slots: [], day: DAYS[new Date(date + 'T12:00:00').getDay()], full: true })
+    }
+
+    // Занятые диапазоны с буферами
+    const busyRanges = dayBookings.map(b => {
+      const startInClientTz = new Date(new Date(b.start_time).toLocaleString('en-US', { timeZone: clientTz }))
+      const endInClientTz = new Date(new Date(b.end_time).toLocaleString('en-US', { timeZone: clientTz }))
+      return {
+        from: startInClientTz.getHours() * 60 + startInClientTz.getMinutes() - (b.buffer_before || 0),
+        to: endInClientTz.getHours() * 60 + endInClientTz.getMinutes() + (b.buffer_after || 0)
+      }
+    })
 
     const isSlotFree = (slotStart) => {
-      // Фильтруем прошедшие слоты для сегодняшнего дня
+      // Прошедшие слоты сегодня
       if (isToday && slotStart <= nowMinutes) return false
+      // Минимум до записи
+      if (isToday && slotStart < nowMinutes + minNoticeMinutes) return false
+      // Для будущих дней — минимум до записи в абсолютном времени
+      if (!isToday && minNotice > 0) {
+        const slotDatetime = new Date(`${date}T${String(Math.floor(slotStart/60)).padStart(2,'0')}:${String(slotStart%60).padStart(2,'0')}:00`)
+        const nowUtc = new Date()
+        if ((slotDatetime - nowUtc) / (1000 * 60 * 60) < minNotice) return false
+      }
+      // Пересечение с бронями
       const slotEnd = slotStart + duration + bufferAfter
       const slotStartWithBuffer = slotStart - bufferBefore
       for (const range of busyRanges) {
-        if (slotStartWithBuffer < range.to && slotEnd > range.from) {
-          return false
-        }
+        if (slotStartWithBuffer < range.to && slotEnd > range.from) return false
       }
       return true
     }
@@ -190,9 +249,7 @@ router.get('/slots/:slug', async (req, res) => {
         const end = eh * 60 + em
         while (current + duration <= end) {
           if (isSlotFree(current)) {
-            const h = Math.floor(current / 60).toString().padStart(2, '0')
-            const m = (current % 60).toString().padStart(2, '0')
-            slots.push(`${h}:${m}`)
+            slots.push(`${Math.floor(current/60).toString().padStart(2,'0')}:${(current%60).toString().padStart(2,'0')}`)
           }
           current += duration
         }
@@ -211,9 +268,7 @@ router.get('/slots/:slug', async (req, res) => {
         const end = eh * 60 + em
         while (current + duration <= end) {
           if (isSlotFree(current)) {
-            const h = Math.floor(current / 60).toString().padStart(2, '0')
-            const m = (current % 60).toString().padStart(2, '0')
-            slots.push(`${h}:${m}`)
+            slots.push(`${Math.floor(current/60).toString().padStart(2,'0')}:${(current%60).toString().padStart(2,'0')}`)
           }
           current += duration
         }
