@@ -102,15 +102,16 @@ router.delete('/flexible/:id', auth, async (req, res) => {
 
 // Получить доступные слоты для клиента
 router.get('/slots/:slug', async (req, res) => {
-  const { date, meeting_type_id } = req.query
+  const { date, meeting_type_id, timezone } = req.query
   try {
     const userResult = await pool.query('SELECT id, schedule_type FROM users WHERE slug = $1', [req.params.slug])
     if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' })
 
     const userId = userResult.rows[0].id
     const scheduleType = userResult.rows[0].schedule_type || 'standard'
+    const clientTz = timezone || 'UTC'
 
-    // Получаем параметры услуги (duration, buffer_before, buffer_after)
+    // Получаем параметры услуги
     let duration = 60
     let bufferBefore = 0
     let bufferAfter = 0
@@ -127,31 +128,44 @@ router.get('/slots/:slug', async (req, res) => {
       }
     }
 
+    // Текущее время в часовом поясе клиента (в минутах от начала дня)
+    const nowInClientTz = new Date(new Date().toLocaleString('en-US', { timeZone: clientTz }))
+    const todayInClientTz = nowInClientTz.toISOString().split('T')[0]
+    const isToday = date === todayInClientTz
+    const nowMinutes = nowInClientTz.getHours() * 60 + nowInClientTz.getMinutes()
+
     // Получаем все активные брони на этот день
+    // Конвертируем start_time/end_time в часовой пояс клиента
     const bookingsResult = await pool.query(
       `SELECT b.start_time, b.end_time, mt.buffer_before, mt.buffer_after
        FROM bookings b
        JOIN meeting_types mt ON b.meeting_type_id = mt.id
        WHERE mt.user_id = $1 
-       AND DATE(b.start_time) = $2 
        AND b.status != 'cancelled'`,
-      [userId, date]
+      [userId]
     )
 
-    // Для каждой брони считаем занятый диапазон с учётом буферов
-    const busyRanges = bookingsResult.rows.map(b => {
-      const start = new Date(b.start_time)
-      const end = new Date(b.end_time)
-      const bBefore = b.buffer_before || 0
-      const bAfter = b.buffer_after || 0
-      return {
-        from: start.getHours() * 60 + start.getMinutes() - bBefore,
-        to: end.getHours() * 60 + end.getMinutes() + bAfter
-      }
-    })
+    // Фильтруем брони которые попадают на нужный день в часовом поясе клиента
+    const busyRanges = bookingsResult.rows
+      .filter(b => {
+        const startInClientTz = new Date(new Date(b.start_time).toLocaleString('en-US', { timeZone: clientTz }))
+        const bookingDate = `${startInClientTz.getFullYear()}-${String(startInClientTz.getMonth()+1).padStart(2,'0')}-${String(startInClientTz.getDate()).padStart(2,'0')}`
+        return bookingDate === date
+      })
+      .map(b => {
+        const startInClientTz = new Date(new Date(b.start_time).toLocaleString('en-US', { timeZone: clientTz }))
+        const endInClientTz = new Date(new Date(b.end_time).toLocaleString('en-US', { timeZone: clientTz }))
+        const bBefore = b.buffer_before || 0
+        const bAfter = b.buffer_after || 0
+        return {
+          from: startInClientTz.getHours() * 60 + startInClientTz.getMinutes() - bBefore,
+          to: endInClientTz.getHours() * 60 + endInClientTz.getMinutes() + bAfter
+        }
+      })
 
-    // Проверяет, пересекается ли предлагаемый слот с занятыми диапазонами
     const isSlotFree = (slotStart) => {
+      // Фильтруем прошедшие слоты для сегодняшнего дня
+      if (isToday && slotStart <= nowMinutes) return false
       const slotEnd = slotStart + duration + bufferAfter
       const slotStartWithBuffer = slotStart - bufferBefore
       for (const range of busyRanges) {
@@ -184,7 +198,7 @@ router.get('/slots/:slug', async (req, res) => {
         }
       }
     } else {
-      const dayOfWeek = new Date(date).getDay()
+      const dayOfWeek = new Date(date + 'T12:00:00').getDay()
       const scheduleResult = await pool.query(
         'SELECT * FROM schedules WHERE user_id = $1 AND day_of_week = $2 AND is_active = true',
         [userId, dayOfWeek]
@@ -206,7 +220,7 @@ router.get('/slots/:slug', async (req, res) => {
       }
     }
 
-    res.json({ slots, day: DAYS[new Date(date).getDay()] })
+    res.json({ slots, day: DAYS[new Date(date + 'T12:00:00').getDay()] })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
