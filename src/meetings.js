@@ -35,7 +35,7 @@ router.post('/', auth, async (req, res) => {
        (user_id, title, description, duration, price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm) 
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
       [req.userId, title, description, duration, price || 0, currency || 'RUB',
-       buffer_before || 0, buffer_after || 0, min_notice || 0, max_days_ahead || 60, max_per_day || 0]
+       buffer_before || 0, buffer_after || 0, min_notice || 0, max_days_ahead || 60, max_per_day || 0, require_confirm || false]
     )
     res.json(result.rows[0])
   } catch (err) {
