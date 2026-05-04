@@ -44,6 +44,11 @@ if (bot) {
       // Подтвердить новую бронь
       if (data.startsWith('confirm_booking_')) {
         const bookingId = data.replace('confirm_booking_', '')
+        
+        // Проверяем текущий статус
+        const current = await pool.query('SELECT status FROM bookings WHERE id = $1', [bookingId])
+        const wasPending = current.rows.length > 0 && current.rows[0].status === 'pending'
+
         const result = await pool.query(
           'UPDATE bookings SET status = $1 WHERE id = $2 RETURNING *',
           ['confirmed', bookingId]
@@ -54,11 +59,12 @@ if (bot) {
             'SELECT mt.title, u.name as expert_name FROM meeting_types mt JOIN users u ON mt.user_id = u.id WHERE mt.id = $1',
             [booking.meeting_type_id]
           )
-          if (meetingResult.rows.length > 0) {
+          if (meetingResult.rows.length > 0 && wasPending) {
             const { sendBookingConfirmation } = require('./email')
-            const date = new Date(booking.start_time).toISOString().split('T')[0]
-            const time = new Date(booking.start_time).toTimeString().slice(0, 5)
-            sendBookingConfirmation(booking.client_email, booking.client_name, meetingResult.rows[0].title, date, time, booking.video_link, meetingResult.rows[0].expert_name, booking.client_token)
+            const startDate = new Date(booking.start_time)
+            const date = `${startDate.getFullYear()}-${String(startDate.getMonth()+1).padStart(2,'0')}-${String(startDate.getDate()).padStart(2,'0')}`
+            const time = `${String(startDate.getHours()).padStart(2,'0')}:${String(startDate.getMinutes()).padStart(2,'0')}`
+            await sendBookingConfirmation(booking.client_email, booking.client_name, meetingResult.rows[0].title, date, time, booking.video_link, meetingResult.rows[0].expert_name, booking.client_token)
           }
           bot.editMessageText(`✅ <b>Встреча подтверждена!</b>\n\n👤 ${booking.client_name}\n🗓 ${new Date(booking.start_time).toLocaleDateString('ru-RU')} в ${new Date(booking.start_time).toTimeString().slice(0,5)}\n\nКлиент получил письмо с подтверждением.`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' })
         }
