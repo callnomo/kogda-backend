@@ -151,25 +151,40 @@ router.post('/client/:token/cancel', async (req, res) => {
 // Коуч подтверждает новую бронь
 router.patch("/:id/confirm", auth, async (req, res) => {
   try {
+    // Проверяем текущий статус — отправляем email только если был pending
+    const current = await pool.query('SELECT status FROM bookings WHERE id = $1', [req.params.id])
+    if (current.rows.length === 0) return res.status(404).json({ error: 'Not found' })
+    const wasPending = current.rows[0].status === 'pending'
+
     const result = await pool.query(
       "UPDATE bookings SET status = $1 WHERE id = $2 RETURNING *",
       ["confirmed", req.params.id]
     )
-    if (result.rows.length > 0) {
+    if (result.rows.length > 0 && wasPending) {
       const booking = result.rows[0]
       const meetingResult = await pool.query(
         "SELECT mt.title, u.name as expert_name FROM meeting_types mt JOIN users u ON mt.user_id = u.id WHERE mt.id = $1",
         [booking.meeting_type_id]
       )
       if (meetingResult.rows.length > 0) {
-        const { sendBookingConfirmation } = require("./email")
-        const date = new Date(booking.start_time).toISOString().split("T")[0]
-        const time = new Date(booking.start_time).toTimeString().slice(0, 5)
-        sendBookingConfirmation(booking.client_email, booking.client_name, meetingResult.rows[0].title, date, time, booking.video_link, meetingResult.rows[0].expert_name, booking.client_token)
+        const startDate = new Date(booking.start_time)
+        const date = `${startDate.getFullYear()}-${String(startDate.getMonth()+1).padStart(2,'0')}-${String(startDate.getDate()).padStart(2,'0')}`
+        const time = `${String(startDate.getHours()).padStart(2,'0')}:${String(startDate.getMinutes()).padStart(2,'0')}`
+        await sendBookingConfirmation(
+          booking.client_email,
+          booking.client_name,
+          meetingResult.rows[0].title,
+          date,
+          time,
+          booking.video_link,
+          meetingResult.rows[0].expert_name,
+          booking.client_token
+        )
       }
     }
     res.json({ success: true })
   } catch (err) {
+    console.error('Confirm error:', err)
     res.status(500).json({ error: "Server error" })
   }
 })
