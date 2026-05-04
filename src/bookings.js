@@ -20,7 +20,7 @@ const auth = (req, res, next) => {
 
 // Создать бронирование
 router.post('/', async (req, res) => {
-  const { meeting_type_id, client_name, client_email, notes, date, time } = req.body
+  const { meeting_type_id, client_name, client_email, notes, date, time, timezone } = req.body
   try {
     const meetingResult = await pool.query(
       `SELECT mt.*, u.name as expert_name, u.id as user_id, u.telegram_chat_id
@@ -33,7 +33,19 @@ router.post('/', async (req, res) => {
     const meeting = meetingResult.rows[0]
 
     const requireConfirm = meeting.require_confirm || false
-    const startTime = new Date(`${date}T${time}:00`)
+
+    // Конвертируем время клиента в UTC с учётом его timezone
+    let startTime
+    if (timezone) {
+      // Создаём дату в timezone клиента и конвертируем в UTC
+      const localDateStr = `${date}T${time}:00`
+      const localDate = new Date(new Date(localDateStr).toLocaleString('en-US', { timeZone: timezone }))
+      const utcOffset = new Date(localDateStr) - localDate
+      startTime = new Date(new Date(localDateStr).getTime() + utcOffset)
+    } else {
+      startTime = new Date(`${date}T${time}:00`)
+    }
+
     const endTime = new Date(startTime.getTime() + meeting.duration * 60000)
     const videoLink = `https://meet.jit.si/kogda-${meeting_type_id}-${Date.now()}`
     const clientToken = crypto.randomBytes(20).toString('hex')
