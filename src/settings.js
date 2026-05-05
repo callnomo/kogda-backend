@@ -22,7 +22,9 @@ router.get('/', auth, async (req, res) => {
     const result = await pool.query(
       `SELECT id, name, email, slug, bio, avatar, telegram_chat_id,
        notify_telegram, notify_email, notify_whatsapp, notify_max,
-       whatsapp_phone, max_phone
+       whatsapp_phone, max_phone,
+       payment_sbp, payment_tinkoff, payment_sber, payment_kaspi,
+       payment_paypal, payment_wise, payment_usdt, payment_bank, payment_other
        FROM users WHERE id = $1`,
       [req.userId]
     )
@@ -77,6 +79,23 @@ router.patch('/notifications', auth, async (req, res) => {
        whatsapp_phone = $5, max_phone = $6
        WHERE id = $7`,
       [notify_telegram, notify_email, notify_whatsapp, notify_max, whatsapp_phone, max_phone, req.userId]
+    )
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Обновить способы оплаты
+router.patch('/payments', auth, async (req, res) => {
+  const { payment_sbp, payment_tinkoff, payment_sber, payment_kaspi, payment_paypal, payment_wise, payment_usdt, payment_bank, payment_other } = req.body
+  try {
+    await pool.query(
+      `UPDATE users SET 
+       payment_sbp=$1, payment_tinkoff=$2, payment_sber=$3, payment_kaspi=$4,
+       payment_paypal=$5, payment_wise=$6, payment_usdt=$7, payment_bank=$8, payment_other=$9
+       WHERE id=$10`,
+      [payment_sbp, payment_tinkoff, payment_sber, payment_kaspi, payment_paypal, payment_wise, payment_usdt, payment_bank, payment_other, req.userId]
     )
     res.json({ success: true })
   } catch (err) {

@@ -28,14 +28,14 @@ router.get('/', auth, async (req, res) => {
 })
 
 router.post('/', auth, async (req, res) => {
-  const { title, description, duration, price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm } = req.body
+  const { title, description, duration, price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy } = req.body
   try {
     const result = await pool.query(
       `INSERT INTO meeting_types 
-       (user_id, title, description, duration, price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+       (user_id, title, description, duration, price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
       [req.userId, title, description, duration, price || 0, currency || 'RUB',
-       buffer_before || 0, buffer_after || 0, min_notice || 0, max_days_ahead || 60, max_per_day || 0, require_confirm || false]
+       buffer_before || 0, buffer_after || 0, min_notice || 0, max_days_ahead || 60, max_per_day || 0, require_confirm || false, cancellation_policy || null]
     )
     res.json(result.rows[0])
   } catch (err) {
@@ -44,16 +44,16 @@ router.post('/', auth, async (req, res) => {
 })
 
 router.patch('/:id', auth, async (req, res) => {
-  const { title, description, duration, price, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm } = req.body
+  const { title, description, duration, price, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy } = req.body
   try {
     const result = await pool.query(
       `UPDATE meeting_types SET 
        title=$1, description=$2, duration=$3, price=$4,
        buffer_before=$5, buffer_after=$6, min_notice=$7, max_days_ahead=$8, max_per_day=$9,
-       require_confirm=$10
-       WHERE id=$11 AND user_id=$12 RETURNING *`,
+       require_confirm=$10, cancellation_policy=$11
+       WHERE id=$12 AND user_id=$13 RETURNING *`,
       [title, description, duration, price, buffer_before || 0, buffer_after || 0,
-       min_notice || 0, max_days_ahead || 60, max_per_day || 0, require_confirm || false, req.params.id, req.userId]
+       min_notice || 0, max_days_ahead || 60, max_per_day || 0, require_confirm || false, cancellation_policy || null, req.params.id, req.userId]
     )
     res.json(result.rows[0])
   } catch (err) {

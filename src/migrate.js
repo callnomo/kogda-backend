@@ -27,6 +27,15 @@ async function migrate() {
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_max BOOLEAN DEFAULT false`)
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS whatsapp_phone VARCHAR(50)`)
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS max_phone VARCHAR(50)`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_sbp BOOLEAN DEFAULT false`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_tinkoff BOOLEAN DEFAULT false`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_sber BOOLEAN DEFAULT false`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_kaspi BOOLEAN DEFAULT false`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_paypal BOOLEAN DEFAULT false`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_wise BOOLEAN DEFAULT false`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_usdt BOOLEAN DEFAULT false`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_bank BOOLEAN DEFAULT false`)
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_other TEXT`)
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS meeting_types (
@@ -52,6 +61,7 @@ async function migrate() {
     await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS max_days_ahead INTEGER DEFAULT 60`)
     await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS max_per_day INTEGER DEFAULT 0`)
     await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS require_confirm BOOLEAN DEFAULT false`)
+    await pool.query(`ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS cancellation_policy TEXT`)
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS bookings (
