@@ -127,8 +127,73 @@ const sendReminder = async (clientEmail, clientName, meetingTitle, date, time, v
     console.error('Reminder email error:', err.message)
   }
 }
-
-module.exports = { sendBookingConfirmation, sendReminder, sendCoachNotification }
+const sendResetPasswordEmail = async (email, name, resetLink) => {
+  try {
+    await resend.emails.send({
+      from: 'kogDA <noreply@kogda.app>',
+      to: email,
+      subject: 'Сброс пароля — kogDA',
+      html: `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;padding:0 20px;">
+ 
+    <div style="text-align:center;margin-bottom:32px;">
+      <span style="font-size:24px;font-weight:800;color:#111;">kog</span>
+      <span style="background:#E8FF47;padding:2px 8px;border-radius:6px;font-size:24px;font-weight:800;color:#111;">DA</span>
+    </div>
+ 
+    <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
+      <div style="width:64px;height:64px;background:#E8FF47;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 24px;text-align:center;line-height:64px;font-size:28px;">
+        🔑
+      </div>
+ 
+      <h1 style="text-align:center;font-size:24px;font-weight:800;color:#111;margin:0 0 8px;">
+        Сброс пароля
+      </h1>
+      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 32px;">
+        Привет, ${name}! Кто-то запросил сброс пароля для твоего аккаунта.
+      </p>
+ 
+      <a href="${resetLink}" style="display:block;background:#111;color:#fff;text-align:center;padding:16px;border-radius:12px;font-size:16px;font-weight:800;text-decoration:none;margin-bottom:20px;">
+        Создать новый пароль →
+      </a>
+ 
+      <div style="background:#F7F6F1;border-radius:12px;padding:16px;margin-bottom:20px;">
+        <p style="margin:0;color:#888;font-size:13px;line-height:1.6;">
+          Ссылка действительна <b style="color:#111;">1 час</b>. Если ты не запрашивал сброс — просто проигнорируй это письмо, твой пароль останется прежним.
+        </p>
+      </div>
+ 
+      <p style="color:#aaa;font-size:12px;text-align:center;margin:0;line-height:1.6;">
+        Кнопка не работает? Скопируй ссылку:<br>
+        <span style="color:#111;word-break:break-all;">${resetLink}</span>
+      </p>
+    </div>
+ 
+    <div style="text-align:center;margin-top:24px;">
+      <p style="color:#aaa;font-size:12px;">
+        <span style="font-weight:800;color:#111;">kog</span>
+        <span style="background:#E8FF47;padding:0 4px;border-radius:3px;font-weight:800;color:#111;">DA</span>
+      </p>
+    </div>
+ 
+  </div>
+</body>
+</html>
+      `
+    })
+    console.log('Reset email отправлен:', email)
+  } catch (err) {
+    console.error('Reset email error:', err.message)
+  }
+}
+module.exports = { sendBookingConfirmation, sendReminder, sendCoachNotification, sendResetPasswordEmail }
 
 async function sendCoachNotification(coachEmail, coachName, clientName, clientEmail, meetingTitle, date, time, bookingId, requireConfirm) {
   const appUrl = 'https://app.kogda.app'
