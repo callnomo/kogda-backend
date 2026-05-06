@@ -14,7 +14,7 @@ const LOGO_HTML = `
 <table cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 32px;" align="center">
   <tr>
     <td style="text-align:center;">
-      <img src="https://kogda.app/kogda-logo.png" alt="kogDA" width="120" style="display:block;border:0;outline:none;text-decoration:none;height:auto;width:120px;">
+      <img src="https://kogda.app/kogda-logo.png" alt="kogDA" width="142" style="display:block;border:0;outline:none;text-decoration:none;height:auto;width:142px;">
     </td>
   </tr>
 </table>
@@ -231,7 +231,7 @@ const sendResetPasswordEmail = async (email, name, resetLink) => {
         Сброс пароля
       </h1>
       <p style="text-align:center;color:#888;font-size:15px;margin:0 0 32px;">
-        Привет, ${name}! Кто-то запросил сброс пароля для твоего аккаунта.
+        Привет! Кто-то запросил сброс пароля для твоего аккаунта.
       </p>
 
       <a href="${resetLink}" style="display:block;background:#111;color:#fff;text-align:center;padding:16px;border-radius:12px;font-size:16px;font-weight:800;text-decoration:none;margin-bottom:20px;">
