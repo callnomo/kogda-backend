@@ -137,8 +137,11 @@ router.post('/complete-registration', async (req, res) => {
   if (!tempToken || !name || !password) {
     return res.status(400).json({ error: 'Заполни все поля' })
   }
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Пароль должен быть минимум 6 символов' })
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Пароль должен быть минимум 8 символов' })
+  }
+  if (!/[a-zA-Zа-яА-Я]/.test(password) || !/\d/.test(password)) {
+    return res.status(400).json({ error: 'Пароль должен содержать буквы и цифры' })
   }
 
   try {
