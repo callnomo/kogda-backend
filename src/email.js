@@ -9,6 +9,28 @@ const formatDate = (dateStr) => {
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`
 }
 
+// Логотип kogDA — единый для всех писем
+const LOGO_HTML = `
+<table cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 32px;" align="center">
+  <tr>
+    <td style="text-align:center;">
+      <img src="https://kogda.app/kogda-logo.png" alt="kogDA" width="120" style="display:block;border:0;outline:none;text-decoration:none;height:auto;width:120px;">
+    </td>
+  </tr>
+</table>
+`
+
+// Иконка в кружке (lime). Через table для совместимости с Mail.ru/Gmail.
+const iconCircle = (emoji) => `
+<table cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 24px;" align="center">
+  <tr>
+    <td width="64" height="64" align="center" valign="middle" style="background:#E8FF47;border-radius:32px;font-size:28px;line-height:64px;text-align:center;">
+      ${emoji}
+    </td>
+  </tr>
+</table>
+`
+
 const sendBookingConfirmation = async (clientEmail, clientName, meetingTitle, date, time, videoLink, expertName, clientToken) => {
   const manageLink = `https://app.kogda.app/booking/${clientToken}`
   try {
@@ -26,15 +48,10 @@ const sendBookingConfirmation = async (clientEmail, clientName, meetingTitle, da
 <body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
   <div style="max-width:560px;margin:40px auto;padding:0 20px;">
 
-    <div style="text-align:center;margin-bottom:32px;">
-      <span style="font-size:24px;font-weight:800;color:#111;">kog</span>
-      <span style="background:#E8FF47;padding:2px 8px;border-radius:6px;font-size:24px;font-weight:800;color:#111;">DA</span>
-    </div>
+    ${LOGO_HTML}
 
     <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
-      <div style="width:64px;height:64px;background:#E8FF47;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 24px;text-align:center;line-height:64px;font-size:28px;">
-        ✓
-      </div>
+      ${iconCircle('✓')}
 
       <h1 style="text-align:center;font-size:24px;font-weight:800;color:#111;margin:0 0 8px;">
         Встреча подтверждена!
@@ -59,11 +76,11 @@ const sendBookingConfirmation = async (clientEmail, clientName, meetingTitle, da
       </div>
 
       <a href="${videoLink}" style="display:block;background:#111;color:#fff;text-align:center;padding:16px;border-radius:12px;font-size:16px;font-weight:800;text-decoration:none;margin-bottom:12px;">
-        📹 Войти на встречу
+        Войти на встречу
       </a>
 
       <a href="${manageLink}" style="display:block;background:#F7F6F1;color:#111;text-align:center;padding:14px;border-radius:12px;font-size:14px;font-weight:600;text-decoration:none;margin-bottom:24px;">
-        Перенести или отменить встречу
+        Перенести или отменить
       </a>
 
       <p style="text-align:center;color:#888;font-size:13px;margin:0;">
@@ -73,9 +90,7 @@ const sendBookingConfirmation = async (clientEmail, clientName, meetingTitle, da
 
     <div style="text-align:center;margin-top:24px;">
       <p style="color:#aaa;font-size:12px;">
-        Письмо отправлено через 
-        <span style="font-weight:800;color:#111;">kog</span>
-        <span style="background:#E8FF47;padding:0 4px;border-radius:3px;font-weight:800;color:#111;">DA</span>
+        Письмо отправлено через kogDA
       </p>
     </div>
 
@@ -102,12 +117,11 @@ const sendReminder = async (clientEmail, clientName, meetingTitle, date, time, v
 <head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
   <div style="max-width:560px;margin:40px auto;padding:0 20px;">
-    <div style="text-align:center;margin-bottom:32px;">
-      <span style="font-size:24px;font-weight:800;color:#111;">kog</span>
-      <span style="background:#E8FF47;padding:2px 8px;border-radius:6px;font-size:24px;font-weight:800;color:#111;">DA</span>
-    </div>
+
+    ${LOGO_HTML}
+
     <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
-      <div style="text-align:center;font-size:40px;margin-bottom:16px;">⏰</div>
+      ${iconCircle('⏰')}
       <h1 style="text-align:center;font-size:22px;font-weight:800;color:#111;margin:0 0 8px;">Встреча завтра!</h1>
       <p style="text-align:center;color:#888;font-size:15px;margin:0 0 28px;">Привет, ${clientName}! Напоминаем о твоей встрече.</p>
       <div style="background:#F7F6F1;border-radius:16px;padding:20px;margin-bottom:24px;">
@@ -115,7 +129,7 @@ const sendReminder = async (clientEmail, clientName, meetingTitle, date, time, v
         <p style="margin:0;color:#888;font-size:14px;">${formatDate(date)} в ${time}</p>
       </div>
       <a href="${videoLink}" style="display:block;background:#111;color:#fff;text-align:center;padding:16px;border-radius:12px;font-size:16px;font-weight:800;text-decoration:none;">
-        📹 Войти на встречу
+        Войти на встречу
       </a>
     </div>
   </div>
@@ -127,75 +141,8 @@ const sendReminder = async (clientEmail, clientName, meetingTitle, date, time, v
     console.error('Reminder email error:', err.message)
   }
 }
-const sendResetPasswordEmail = async (email, name, resetLink) => {
-  try {
-    await resend.emails.send({
-      from: 'kogDA <noreply@kogda.app>',
-      to: email,
-      subject: 'Сброс пароля — kogDA',
-      html: `
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
-  <div style="max-width:560px;margin:40px auto;padding:0 20px;">
- 
-    <div style="text-align:center;margin-bottom:32px;">
-      <span style="font-size:24px;font-weight:800;color:#111;">kog</span>
-      <span style="background:#E8FF47;padding:2px 8px;border-radius:6px;font-size:24px;font-weight:800;color:#111;">DA</span>
-    </div>
- 
-    <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
-      <div style="width:64px;height:64px;background:#E8FF47;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 24px;text-align:center;line-height:64px;font-size:28px;">
-        🔑
-      </div>
- 
-      <h1 style="text-align:center;font-size:24px;font-weight:800;color:#111;margin:0 0 8px;">
-        Сброс пароля
-      </h1>
-      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 32px;">
-        Привет, ${name}! Кто-то запросил сброс пароля для твоего аккаунта.
-      </p>
- 
-      <a href="${resetLink}" style="display:block;background:#111;color:#fff;text-align:center;padding:16px;border-radius:12px;font-size:16px;font-weight:800;text-decoration:none;margin-bottom:20px;">
-        Создать новый пароль →
-      </a>
- 
-      <div style="background:#F7F6F1;border-radius:12px;padding:16px;margin-bottom:20px;">
-        <p style="margin:0;color:#888;font-size:13px;line-height:1.6;">
-          Ссылка действительна <b style="color:#111;">1 час</b>. Если ты не запрашивал сброс — просто проигнорируй это письмо, твой пароль останется прежним.
-        </p>
-      </div>
- 
-      <p style="color:#aaa;font-size:12px;text-align:center;margin:0;line-height:1.6;">
-        Кнопка не работает? Скопируй ссылку:<br>
-        <span style="color:#111;word-break:break-all;">${resetLink}</span>
-      </p>
-    </div>
- 
-    <div style="text-align:center;margin-top:24px;">
-      <p style="color:#aaa;font-size:12px;">
-        <span style="font-weight:800;color:#111;">kog</span>
-        <span style="background:#E8FF47;padding:0 4px;border-radius:3px;font-weight:800;color:#111;">DA</span>
-      </p>
-    </div>
- 
-  </div>
-</body>
-</html>
-      `
-    })
-    console.log('Reset email отправлен:', email)
-  } catch (err) {
-    console.error('Reset email error:', err.message)
-  }
-}
-module.exports = { sendBookingConfirmation, sendReminder, sendCoachNotification, sendResetPasswordEmail }
 
-async function sendCoachNotification(coachEmail, coachName, clientName, clientEmail, meetingTitle, date, time, bookingId, requireConfirm) {
+const sendCoachNotification = async (coachEmail, coachName, clientName, clientEmail, meetingTitle, date, time, bookingId, requireConfirm) => {
   const appUrl = 'https://app.kogda.app'
   const confirmUrl = `${appUrl}/bookings`
   try {
@@ -212,14 +159,11 @@ async function sendCoachNotification(coachEmail, coachName, clientName, clientEm
 </head>
 <body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
   <div style="max-width:560px;margin:40px auto;padding:0 20px;">
-    <div style="text-align:center;margin-bottom:32px;">
-      <span style="font-size:24px;font-weight:800;color:#111;">kog</span>
-      <span style="background:#E8FF47;padding:2px 8px;border-radius:6px;font-size:24px;font-weight:800;color:#111;">DA</span>
-    </div>
+
+    ${LOGO_HTML}
+
     <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
-      <div style="width:56px;height:56px;background:#E8FF47;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;text-align:center;line-height:56px;font-size:24px;">
-        ${requireConfirm ? '⏳' : '🎉'}
-      </div>
+      ${iconCircle(requireConfirm ? '⏳' : '🎉')}
       <h1 style="text-align:center;font-size:22px;font-weight:800;color:#111;margin:0 0 8px;">
         ${requireConfirm ? 'Новая заявка!' : 'Новая запись!'}
       </h1>
@@ -243,19 +187,13 @@ async function sendCoachNotification(coachEmail, coachName, clientName, clientEm
       </div>
       ${requireConfirm ? `
       <a href="${confirmUrl}" style="display:block;background:#111;color:#fff;text-align:center;padding:16px;border-radius:12px;font-size:16px;font-weight:800;text-decoration:none;margin-bottom:12px;">
-        Подтвердить или отклонить →
+        Подтвердить или отклонить
       </a>
       ` : `
       <a href="${confirmUrl}" style="display:block;background:#F7F6F1;color:#111;text-align:center;padding:14px;border-radius:12px;font-size:14px;font-weight:600;text-decoration:none;">
-        Посмотреть все записи →
+        Посмотреть все записи
       </a>
       `}
-    </div>
-    <div style="text-align:center;margin-top:24px;">
-      <p style="color:#aaa;font-size:12px;">
-        <span style="font-weight:800;color:#111;">kog</span>
-        <span style="background:#E8FF47;padding:0 4px;border-radius:3px;font-weight:800;color:#111;">DA</span>
-      </p>
     </div>
   </div>
 </body>
@@ -267,3 +205,60 @@ async function sendCoachNotification(coachEmail, coachName, clientName, clientEm
     console.error('Coach email error:', err.message)
   }
 }
+
+const sendResetPasswordEmail = async (email, name, resetLink) => {
+  try {
+    await resend.emails.send({
+      from: 'kogDA <noreply@kogda.app>',
+      to: email,
+      subject: 'Сброс пароля — kogDA',
+      html: `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;padding:0 20px;">
+
+    ${LOGO_HTML}
+
+    <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
+      ${iconCircle('🔑')}
+
+      <h1 style="text-align:center;font-size:24px;font-weight:800;color:#111;margin:0 0 8px;">
+        Сброс пароля
+      </h1>
+      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 32px;">
+        Привет, ${name}! Кто-то запросил сброс пароля для твоего аккаунта.
+      </p>
+
+      <a href="${resetLink}" style="display:block;background:#111;color:#fff;text-align:center;padding:16px;border-radius:12px;font-size:16px;font-weight:800;text-decoration:none;margin-bottom:20px;">
+        Создать новый пароль
+      </a>
+
+      <div style="background:#F7F6F1;border-radius:12px;padding:16px;margin-bottom:20px;">
+        <p style="margin:0;color:#888;font-size:13px;line-height:1.6;">
+          Ссылка действительна <b style="color:#111;">1 час</b>. Если ты не запрашивал сброс — просто проигнорируй это письмо, твой пароль останется прежним.
+        </p>
+      </div>
+
+      <p style="color:#aaa;font-size:12px;text-align:center;margin:0;line-height:1.6;">
+        Кнопка не работает? Скопируй ссылку:<br>
+        <span style="color:#111;word-break:break-all;">${resetLink}</span>
+      </p>
+    </div>
+
+  </div>
+</body>
+</html>
+      `
+    })
+    console.log('Reset email отправлен:', email)
+  } catch (err) {
+    console.error('Reset email error:', err.message)
+  }
+}
+
+module.exports = { sendBookingConfirmation, sendReminder, sendCoachNotification, sendResetPasswordEmail }
