@@ -26,7 +26,7 @@ function formatSize(bytes) {
 
 function dumpAndCompress(databaseUrl, outputPath) {
   return new Promise((resolve, reject) => {
-    const dump = spawn('pg_dump', [databaseUrl])
+    const dump = spawn('pg_dump', ['--dbname=' + databaseUrl])
     const gzip = zlib.createGzip()
     const output = fs.createWriteStream(outputPath)
 
