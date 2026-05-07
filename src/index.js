@@ -1,6 +1,8 @@
+require('./instrument')
 require('dotenv').config()
 const express = require('express')
 const cors = require('cors')
+const Sentry = require('@sentry/node')
 const pool = require('./db')
 const authRoutes = require('./auth')
 const meetingRoutes = require('./meetings')
@@ -33,6 +35,8 @@ app.get('/health', async (req, res) => {
     res.status(500).json({ status: 'error', db: 'disconnected' })
   }
 })
+
+Sentry.setupExpressErrorHandler(app)
 
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
