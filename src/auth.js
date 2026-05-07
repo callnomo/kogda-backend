@@ -9,6 +9,16 @@ const {
   sendVerificationCode,
   sendEmailTakenWarning
 } = require('./email')
+const {
+  loginLimiter,
+  requestCodeLimiter,
+  verifyCodeLimiter,
+  completeRegistrationLimiter,
+  forgotPasswordLimiter,
+  resetPasswordLimiter,
+  changePasswordLimiter,
+  deleteAccountLimiter,
+} = require('./rateLimiters')
 
 const normalizeEmail = (email) => (email || '').trim().toLowerCase()
 
@@ -31,7 +41,7 @@ async function generateUniqueSlug() {
 
 // ===== ШАГ 1: Запросить код =====
 // Всегда отвечает success — если email занят, шлём предупреждение, не код.
-router.post('/request-code', async (req, res) => {
+router.post('/request-code', requestCodeLimiter, async (req, res) => {
   const email = normalizeEmail(req.body.email)
   if (!email) {
     return res.status(400).json({ error: 'Введи email' })
@@ -72,7 +82,7 @@ router.post('/request-code', async (req, res) => {
 })
 
 // ===== ШАГ 2: Проверить код =====
-router.post('/verify-code', async (req, res) => {
+router.post('/verify-code', verifyCodeLimiter, async (req, res) => {
   const email = normalizeEmail(req.body.email)
   const { code } = req.body
 
@@ -131,7 +141,7 @@ router.post('/verify-code', async (req, res) => {
 })
 
 // ===== ШАГ 3: Завершить регистрацию =====
-router.post('/complete-registration', async (req, res) => {
+router.post('/complete-registration', completeRegistrationLimiter, async (req, res) => {
   const { tempToken, name, password } = req.body
 
   if (!tempToken || !name || !password) {
@@ -199,7 +209,7 @@ router.post('/register', async (req, res) => {
 })
 
 // ===== Логин =====
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   const email = normalizeEmail(req.body.email)
   const { password } = req.body
   try {
@@ -239,7 +249,7 @@ router.post('/login', async (req, res) => {
 })
 
 // ===== Забыл пароль =====
-router.post('/forgot-password', async (req, res) => {
+router.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
   const email = normalizeEmail(req.body.email)
   try {
     const result = await pool.query(
@@ -287,7 +297,7 @@ router.get('/reset-password/:token/check', async (req, res) => {
 })
 
 // ===== Установить новый пароль =====
-router.post('/reset-password', async (req, res) => {
+router.post('/reset-password', resetPasswordLimiter, async (req, res) => {
   const { token, password } = req.body
   if (!password || password.length < 6) {
     return res.status(400).json({ error: 'Пароль должен быть минимум 6 символов' })
@@ -329,7 +339,7 @@ const auth = (req, res, next) => {
 }
 
 // ===== Сменить пароль =====
-router.patch('/change-password', auth, async (req, res) => {
+router.patch('/change-password', changePasswordLimiter, auth, async (req, res) => {
   const { currentPassword, newPassword } = req.body
   if (!newPassword || newPassword.length < 6) {
     return res.status(400).json({ error: 'Новый пароль должен быть минимум 6 символов' })
@@ -352,7 +362,7 @@ router.patch('/change-password', auth, async (req, res) => {
 })
 
 // ===== Удалить аккаунт =====
-router.delete('/delete-account', auth, async (req, res) => {
+router.delete('/delete-account', deleteAccountLimiter, auth, async (req, res) => {
   const { password } = req.body
   if (!password) {
     return res.status(400).json({ error: 'Введите пароль для подтверждения' })
