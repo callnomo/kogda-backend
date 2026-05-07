@@ -1,5 +1,5 @@
-require('./instrument')
 require('dotenv').config()
+require('./instrument')
 const express = require('express')
 const cors = require('cors')
 const Sentry = require('@sentry/node')
