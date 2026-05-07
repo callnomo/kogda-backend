@@ -36,6 +36,10 @@ app.get('/health', async (req, res) => {
   }
 })
 
+app.get('/debug-sentry', (req, res) => {
+  throw new Error('Тестовая ошибка для Sentry!')
+})
+
 Sentry.setupExpressErrorHandler(app)
 
 const PORT = process.env.PORT || 3000
