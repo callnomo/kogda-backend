@@ -39,7 +39,17 @@ app.get('/health', async (req, res) => {
 
 Sentry.setupExpressErrorHandler(app)
 
+const { runMigrations } = require('./runMigrations')
+
 const PORT = process.env.PORT || 3000
-app.listen(PORT, () => {
-  console.log(`kogDA сервер запущен на порту ${PORT}`)
-})
+
+runMigrations()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`kogDA сервер запущен на порту ${PORT}`)
+    })
+  })
+  .catch((err) => {
+    console.error('[startup] Не удалось применить миграции:', err)
+    process.exit(1)
+  })
