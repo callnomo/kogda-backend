@@ -1,8 +1,10 @@
 const express = require('express')
 const router = express.Router()
+const multer = require('multer')
 const pool = require('./db')
 const jwt = require('jsonwebtoken')
 const crypto = require('crypto')
+const { uploadAvatar, deleteAvatar } = require('./r2')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -15,6 +17,18 @@ const auth = (req, res, next) => {
     res.status(401).json({ error: 'Invalid token' })
   }
 }
+
+// Multer: храним файл в памяти, лимит 5MB, только картинки
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('Только изображения'))
+    }
+    cb(null, true)
+  },
+})
 
 // Получить настройки
 router.get('/', auth, async (req, res) => {
@@ -65,6 +79,48 @@ router.patch('/profile', auth, async (req, res) => {
     res.json(result.rows[0])
   } catch (err) {
     res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Загрузить аватар
+router.post('/avatar', auth, upload.single('avatar'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Файл не получен' })
+
+    // Получить старый avatar для удаления
+    const oldRes = await pool.query('SELECT avatar FROM users WHERE id = $1', [req.userId])
+    const oldAvatar = oldRes.rows[0]?.avatar
+
+    // Загрузить новый в R2
+    const newUrl = await uploadAvatar(req.file.buffer, req.file.mimetype, req.userId)
+
+    // Записать в БД
+    await pool.query('UPDATE users SET avatar = $1 WHERE id = $2', [newUrl, req.userId])
+
+    // Удалить старый из R2 (если был наш)
+    if (oldAvatar) await deleteAvatar(oldAvatar)
+
+    res.json({ avatar: newUrl })
+  } catch (err) {
+    console.error('Avatar upload error:', err)
+    res.status(500).json({ error: err.message || 'Ошибка загрузки' })
+  }
+})
+
+// Удалить аватар
+router.delete('/avatar', auth, async (req, res) => {
+  try {
+    const oldRes = await pool.query('SELECT avatar FROM users WHERE id = $1', [req.userId])
+    const oldAvatar = oldRes.rows[0]?.avatar
+
+    await pool.query('UPDATE users SET avatar = NULL WHERE id = $1', [req.userId])
+
+    if (oldAvatar) await deleteAvatar(oldAvatar)
+
+    res.json({ success: true })
+  } catch (err) {
+    console.error('Avatar delete error:', err)
+    res.status(500).json({ error: 'Ошибка удаления' })
   }
 })
 
