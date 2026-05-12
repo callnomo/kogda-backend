@@ -1,0 +1,1 @@
+ALTER TABLE meeting_types ADD COLUMN IF NOT EXISTS hide_price BOOLEAN NOT NULL DEFAULT false;

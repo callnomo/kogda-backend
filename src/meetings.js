@@ -32,16 +32,16 @@ router.get('/', auth, async (req, res) => {
 })
 
 router.post('/', auth, async (req, res) => {
-  const { title, description, duration, price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy } = req.body
+  const { title, description, duration, price, hide_price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy } = req.body
   try {
     const baseSlug = makeSlug(title)
     const slug = await makeUniqueSlug(pool, req.userId, baseSlug)
 
     const result = await pool.query(
       `INSERT INTO meeting_types 
-       (user_id, title, slug, description, duration, price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
-      [req.userId, title, slug, description, duration, price || 0, currency || 'RUB',
+       (user_id, title, slug, description, duration, price, hide_price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+      [req.userId, title, slug, description, duration, price || 0, hide_price || false, currency || 'RUB',
        buffer_before || 0, buffer_after || 0, min_notice || 0, max_days_ahead || 60, max_per_day || 0, require_confirm || false, cancellation_policy || null]
     )
     res.json(result.rows[0])
@@ -52,15 +52,16 @@ router.post('/', auth, async (req, res) => {
 })
 
 router.patch('/:id', auth, async (req, res) => {
-  const { title, description, duration, price, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy } = req.body
+  const { title, description, duration, price, hide_price, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy } = req.body
   try {
     const result = await pool.query(
       `UPDATE meeting_types SET 
-       title=$1, description=$2, duration=$3, price=$4,
-       buffer_before=$5, buffer_after=$6, min_notice=$7, max_days_ahead=$8, max_per_day=$9,
-       require_confirm=$10, cancellation_policy=$11
-       WHERE id=$12 AND user_id=$13 RETURNING *`,
-      [title, description, duration, price, buffer_before || 0, buffer_after || 0,
+       title=$1, description=$2, duration=$3, price=$4, hide_price=$5,
+       buffer_before=$6, buffer_after=$7, min_notice=$8, max_days_ahead=$9, max_per_day=$10,
+       require_confirm=$11, cancellation_policy=$12
+       WHERE id=$13 AND user_id=$14 RETURNING *`,
+      [title, description, duration, price, hide_price || false,
+       buffer_before || 0, buffer_after || 0,
        min_notice || 0, max_days_ahead || 60, max_per_day || 0, require_confirm || false, cancellation_policy || null, req.params.id, req.userId]
     )
     res.json(result.rows[0])
@@ -97,17 +98,14 @@ router.delete('/:id', auth, async (req, res) => {
 
 // ============ ОДНОРАЗОВЫЕ ССЫЛКИ ============
 
-// Создать одноразовую ссылку для услуги
 router.post('/:id/single-use', auth, async (req, res) => {
   try {
-    // Проверяем что услуга принадлежит этому пользователю
     const meeting = await pool.query(
       'SELECT id FROM meeting_types WHERE id = $1 AND user_id = $2',
       [req.params.id, req.userId]
     )
     if (meeting.rows.length === 0) return res.status(404).json({ error: 'Meeting not found' })
 
-    // Генерируем токен: 16 байт = 32 hex-символа
     const token = crypto.randomBytes(16).toString('hex')
 
     const result = await pool.query(
@@ -121,10 +119,8 @@ router.post('/:id/single-use', auth, async (req, res) => {
   }
 })
 
-// Список неиспользованных одноразовых ссылок для услуги
 router.get('/:id/single-use', auth, async (req, res) => {
   try {
-    // Проверяем что услуга принадлежит юзеру
     const meeting = await pool.query(
       'SELECT id FROM meeting_types WHERE id = $1 AND user_id = $2',
       [req.params.id, req.userId]
@@ -142,10 +138,8 @@ router.get('/:id/single-use', auth, async (req, res) => {
   }
 })
 
-// Отозвать одноразовую ссылку (удалить токен)
 router.delete('/single-use/:token', auth, async (req, res) => {
   try {
-    // Проверяем владение через JOIN
     const result = await pool.query(
       `DELETE FROM single_use_links 
        WHERE token = $1 
@@ -163,7 +157,6 @@ router.delete('/single-use/:token', auth, async (req, res) => {
 
 // ============ ПУБЛИЧНЫЕ ENDPOINT'Ы ============
 
-// Публичная страница: список всех активных услуг коуча
 router.get('/public/:slug', async (req, res) => {
   try {
     const user = await pool.query(
@@ -181,7 +174,6 @@ router.get('/public/:slug', async (req, res) => {
   }
 })
 
-// Прямая ссылка на конкретную услугу. Работает и для скрытых (secret-режим)
 router.get('/public/:userSlug/:serviceSlug', async (req, res) => {
   try {
     const user = await pool.query(
@@ -203,8 +195,6 @@ router.get('/public/:userSlug/:serviceSlug', async (req, res) => {
   }
 })
 
-// Публичная одноразовая ссылка: получить услугу по токену.
-// Если токен использован — возвращаем 410 Gone (ссылка истекла).
 router.get('/once/:token', async (req, res) => {
   try {
     const link = await pool.query(
@@ -233,7 +223,6 @@ router.get('/once/:token', async (req, res) => {
   }
 })
 
-// Пометить одноразовую ссылку как использованную после booking
 router.post('/once/:token/use', async (req, res) => {
   try {
     const { booking_id } = req.body
