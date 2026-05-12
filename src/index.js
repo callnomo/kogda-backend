@@ -41,11 +41,13 @@ Sentry.setupExpressErrorHandler(app)
 
 const { runMigrations } = require('./runMigrations')
 const { backfillMeetingSlugs } = require('./backfillSlugs')
+const { backfillSortOrder } = require('./backfillSortOrder')
 
 const PORT = process.env.PORT || 3000
 
 runMigrations()
   .then(() => backfillMeetingSlugs())
+  .then(() => backfillSortOrder())
   .then(() => {
     app.listen(PORT, () => {
       console.log(`kogDA сервер запущен на порту ${PORT}`)

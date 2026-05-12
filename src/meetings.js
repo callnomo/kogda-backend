@@ -22,12 +22,41 @@ const auth = (req, res, next) => {
 router.get('/', auth, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM meeting_types WHERE user_id = $1 ORDER BY created_at DESC',
+      'SELECT * FROM meeting_types WHERE user_id = $1 ORDER BY sort_order ASC, created_at DESC',
       [req.userId]
     )
     res.json(result.rows)
   } catch (err) {
     res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Изменить порядок услуг. Принимает { order: [id1, id2, id3, ...] } — id в новом порядке.
+router.patch('/reorder', auth, async (req, res) => {
+  const { order } = req.body
+  if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be array' })
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+
+    // Обновляем sort_order для каждой услуги. Проверяем что услуга принадлежит юзеру.
+    for (let i = 0; i < order.length; i++) {
+      const id = order[i]
+      await client.query(
+        `UPDATE meeting_types SET sort_order = $1 WHERE id = $2 AND user_id = $3`,
+        [i + 1, id, req.userId]
+      )
+    }
+
+    await client.query('COMMIT')
+    res.json({ success: true })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    console.error('[meetings reorder]', err)
+    res.status(500).json({ error: 'Server error' })
+  } finally {
+    client.release()
   }
 })
 
@@ -37,12 +66,19 @@ router.post('/', auth, async (req, res) => {
     const baseSlug = makeSlug(title)
     const slug = await makeUniqueSlug(pool, req.userId, baseSlug)
 
+    // Новая услуга идёт в конец (MAX + 1)
+    const maxOrder = await pool.query(
+      `SELECT COALESCE(MAX(sort_order), 0) AS max FROM meeting_types WHERE user_id = $1`,
+      [req.userId]
+    )
+    const newSortOrder = parseInt(maxOrder.rows[0].max, 10) + 1
+
     const result = await pool.query(
       `INSERT INTO meeting_types 
-       (user_id, title, slug, description, duration, price, hide_price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+       (user_id, title, slug, description, duration, price, hide_price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy, sort_order) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
       [req.userId, title, slug, description, duration, price || 0, hide_price || false, currency || 'RUB',
-       buffer_before || 0, buffer_after || 0, min_notice || 0, max_days_ahead || 60, max_per_day || 0, require_confirm || false, cancellation_policy || null]
+       buffer_before || 0, buffer_after || 0, min_notice || 0, max_days_ahead || 60, max_per_day || 0, require_confirm || false, cancellation_policy || null, newSortOrder]
     )
     res.json(result.rows[0])
   } catch (err) {
@@ -165,7 +201,7 @@ router.get('/public/:slug', async (req, res) => {
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'Not found' })
     const meetings = await pool.query(
-      'SELECT * FROM meeting_types WHERE user_id = $1 AND is_active = true',
+      'SELECT * FROM meeting_types WHERE user_id = $1 AND is_active = true ORDER BY sort_order ASC, created_at DESC',
       [user.rows[0].id]
     )
     res.json({ user: user.rows[0], meetings: meetings.rows })
