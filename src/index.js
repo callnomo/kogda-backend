@@ -40,10 +40,12 @@ app.get('/health', async (req, res) => {
 Sentry.setupExpressErrorHandler(app)
 
 const { runMigrations } = require('./runMigrations')
+const { backfillMeetingSlugs } = require('./backfillSlugs')
 
 const PORT = process.env.PORT || 3000
 
 runMigrations()
+  .then(() => backfillMeetingSlugs())
   .then(() => {
     app.listen(PORT, () => {
       console.log(`kogDA сервер запущен на порту ${PORT}`)
