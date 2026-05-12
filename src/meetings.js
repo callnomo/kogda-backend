@@ -2,6 +2,7 @@ const express = require('express')
 const router = express.Router()
 const pool = require('./db')
 const jwt = require('jsonwebtoken')
+const { makeSlug, makeUniqueSlug } = require('./slugify')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -30,15 +31,20 @@ router.get('/', auth, async (req, res) => {
 router.post('/', auth, async (req, res) => {
   const { title, description, duration, price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy } = req.body
   try {
+    // Генерируем уникальный slug из title
+    const baseSlug = makeSlug(title)
+    const slug = await makeUniqueSlug(pool, req.userId, baseSlug)
+
     const result = await pool.query(
       `INSERT INTO meeting_types 
-       (user_id, title, description, duration, price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
-      [req.userId, title, description, duration, price || 0, currency || 'RUB',
+       (user_id, title, slug, description, duration, price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
+      [req.userId, title, slug, description, duration, price || 0, currency || 'RUB',
        buffer_before || 0, buffer_after || 0, min_notice || 0, max_days_ahead || 60, max_per_day || 0, require_confirm || false, cancellation_policy || null]
     )
     res.json(result.rows[0])
   } catch (err) {
+    console.error('[meetings POST]', err)
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -46,6 +52,7 @@ router.post('/', auth, async (req, res) => {
 router.patch('/:id', auth, async (req, res) => {
   const { title, description, duration, price, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy } = req.body
   try {
+    // ВАЖНО: slug при изменении title НЕ меняется — старые ссылки должны работать
     const result = await pool.query(
       `UPDATE meeting_types SET 
        title=$1, description=$2, duration=$3, price=$4,
@@ -87,6 +94,7 @@ router.delete('/:id', auth, async (req, res) => {
   }
 })
 
+// Публичная страница: список всех активных услуг коуча
 router.get('/public/:slug', async (req, res) => {
   try {
     const user = await pool.query(
@@ -100,6 +108,28 @@ router.get('/public/:slug', async (req, res) => {
     )
     res.json({ user: user.rows[0], meetings: meetings.rows })
   } catch (err) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Прямая ссылка на конкретную услугу. Возвращает услугу даже если она скрыта (is_active=false) — секрет-режим
+router.get('/public/:userSlug/:serviceSlug', async (req, res) => {
+  try {
+    const user = await pool.query(
+      'SELECT id, name, bio, avatar, slug FROM users WHERE slug = $1',
+      [req.params.userSlug]
+    )
+    if (user.rows.length === 0) return res.status(404).json({ error: 'User not found' })
+
+    const meeting = await pool.query(
+      'SELECT * FROM meeting_types WHERE user_id = $1 AND slug = $2',
+      [user.rows[0].id, req.params.serviceSlug]
+    )
+    if (meeting.rows.length === 0) return res.status(404).json({ error: 'Service not found' })
+
+    res.json({ user: user.rows[0], meeting: meeting.rows[0] })
+  } catch (err) {
+    console.error('[meetings public direct]', err)
     res.status(500).json({ error: 'Server error' })
   }
 })
