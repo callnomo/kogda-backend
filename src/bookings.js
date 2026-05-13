@@ -4,7 +4,7 @@ const pool = require('./db')
 const jwt = require('jsonwebtoken')
 const crypto = require('crypto')
 const { notifyNewBooking, notifyBookingCancelled, notifyRescheduleRequest } = require('./telegram')
-const { sendBookingConfirmation, sendCoachNotification } = require('./email')
+const { sendBookingConfirmation, sendCoachNotification, sendBookingCancelledByCoachEmail } = require('./email')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -34,10 +34,8 @@ router.post('/', async (req, res) => {
 
     const requireConfirm = meeting.require_confirm || false
 
-    // Конвертируем время клиента в UTC с учётом его timezone
     let startTime
     if (timezone) {
-      // Создаём дату в timezone клиента и конвертируем в UTC
       const localDateStr = `${date}T${time}:00`
       const localDate = new Date(new Date(localDateStr).toLocaleString('en-US', { timeZone: timezone }))
       const utcOffset = new Date(localDateStr) - localDate
@@ -60,10 +58,8 @@ router.post('/', async (req, res) => {
 
     const booking = result.rows[0]
 
-    // Telegram уведомление коучу
     notifyNewBooking(booking, meeting.title, client_name, client_email, date, time, meeting.user_id, requireConfirm)
 
-    // Email коучу если включено в настройках
     const coachResult = await pool.query(
       'SELECT email, name, notify_email FROM users WHERE id = $1',
       [meeting.user_id]
@@ -73,7 +69,6 @@ router.post('/', async (req, res) => {
       sendCoachNotification(coach.email, coach.name, client_name, client_email, meeting.title, date, time, booking.id, requireConfirm)
     }
 
-    // Email клиенту — только если не требует подтверждения
     if (!requireConfirm) {
       sendBookingConfirmation(client_email, client_name, meeting.title, date, time, videoLink, meeting.expert_name, clientToken)
     }
@@ -124,7 +119,6 @@ router.post('/client/:token/reschedule', async (req, res) => {
       [newStartTime, 'reschedule_requested', req.params.token]
     )
 
-    // Уведомляем коуча в Telegram
     notifyRescheduleRequest(booking.client_name, booking.meeting_title, new_date, new_time, booking.id, booking.user_id)
 
     res.json({ success: true })
@@ -133,7 +127,7 @@ router.post('/client/:token/reschedule', async (req, res) => {
   }
 })
 
-// Клиент отменяет бронь
+// Клиент отменяет бронь (сам)
 router.post('/client/:token/cancel', async (req, res) => {
   try {
     const bookingResult = await pool.query(
@@ -161,7 +155,6 @@ router.post('/client/:token/cancel', async (req, res) => {
 // Коуч подтверждает новую бронь
 router.patch("/:id/confirm", auth, async (req, res) => {
   try {
-    // Проверяем текущий статус — отправляем email только если был pending
     const current = await pool.query('SELECT status FROM bookings WHERE id = $1', [req.params.id])
     if (current.rows.length === 0) return res.status(404).json({ error: 'Not found' })
     const wasPending = current.rows[0].status === 'pending'
@@ -206,7 +199,9 @@ router.patch('/:id/confirm-reschedule', auth, async (req, res) => {
     if (bookingResult.rows.length === 0) return res.status(404).json({ error: 'Not found' })
     const booking = bookingResult.rows[0]
 
-    const newEndTime = new Date(booking.reschedule_time.getTime() + booking.duration * 60000)
+    const meetingResult = await pool.query('SELECT duration FROM meeting_types WHERE id = $1', [booking.meeting_type_id])
+    const duration = meetingResult.rows[0]?.duration || 60
+    const newEndTime = new Date(new Date(booking.reschedule_time).getTime() + duration * 60000)
 
     await pool.query(
       'UPDATE bookings SET start_time = $1, end_time = $2, status = $3, reschedule_request = NULL, reschedule_time = NULL WHERE id = $4',
@@ -248,25 +243,51 @@ router.get('/', auth, async (req, res) => {
   }
 })
 
-// Отменить бронь (коуч)
+// Коуч отменяет/отклоняет бронь
+// Используется и для отмены confirmed, и для отклонения pending
+// 1) UPDATE status = 'cancelled'
+// 2) Telegram коучу (notifyBookingCancelled)
+// 3) Email клиенту (sendBookingCancelledByCoachEmail) — встреча отменена
 router.patch('/:id/cancel', auth, async (req, res) => {
   try {
     const bookingResult = await pool.query(
-      `SELECT b.*, mt.title as meeting_title, mt.user_id
+      `SELECT b.*, mt.title as meeting_title, mt.user_id, u.name as expert_name
        FROM bookings b
        JOIN meeting_types mt ON b.meeting_type_id = mt.id
+       JOIN users u ON mt.user_id = u.id
        WHERE b.id = $1`,
       [req.params.id]
     )
-    if (bookingResult.rows.length > 0) {
-      const booking = bookingResult.rows[0]
-      const date = new Date(booking.start_time).toLocaleDateString('ru-RU')
-      const time = new Date(booking.start_time).toTimeString().slice(0, 5)
-      notifyBookingCancelled(booking.client_name, booking.meeting_title, date, time, booking.user_id)
+    if (bookingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Not found' })
     }
+
+    const booking = bookingResult.rows[0]
+
+    if (booking.user_id !== req.userId) {
+      return res.status(403).json({ error: 'Forbidden' })
+    }
+
+    const startDate = new Date(booking.start_time)
+    const dateRu = startDate.toLocaleDateString('ru-RU')
+    const timeRu = startDate.toTimeString().slice(0, 5)
+    const dateIso = `${startDate.getFullYear()}-${String(startDate.getMonth()+1).padStart(2,'0')}-${String(startDate.getDate()).padStart(2,'0')}`
+
+    notifyBookingCancelled(booking.client_name, booking.meeting_title, dateRu, timeRu, booking.user_id)
+
+    sendBookingCancelledByCoachEmail(
+      booking.client_email,
+      booking.client_name,
+      booking.meeting_title,
+      dateIso,
+      timeRu,
+      booking.expert_name
+    )
+
     await pool.query('UPDATE bookings SET status = $1 WHERE id = $2', ['cancelled', req.params.id])
     res.json({ success: true })
   } catch (err) {
+    console.error('[bookings cancel]', err)
     res.status(500).json({ error: 'Server error' })
   }
 })

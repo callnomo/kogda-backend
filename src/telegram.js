@@ -44,8 +44,7 @@ if (bot) {
       // Подтвердить новую бронь
       if (data.startsWith('confirm_booking_')) {
         const bookingId = data.replace('confirm_booking_', '')
-        
-        // Проверяем текущий статус
+
         const current = await pool.query('SELECT status FROM bookings WHERE id = $1', [bookingId])
         const wasPending = current.rows.length > 0 && current.rows[0].status === 'pending'
 
@@ -71,15 +70,47 @@ if (bot) {
       }
 
       // Отклонить новую бронь
+      // ОБНОВЛЕНО: отправляем клиенту email об отмене
       else if (data.startsWith('reject_booking_')) {
         const bookingId = data.replace('reject_booking_', '')
-        const result = await pool.query(
-          'UPDATE bookings SET status = $1 WHERE id = $2 RETURNING *',
+
+        // Получаем полные данные ДО update — нужны для email
+        const fullResult = await pool.query(
+          `SELECT b.*, mt.title as meeting_title, u.name as expert_name
+           FROM bookings b
+           JOIN meeting_types mt ON b.meeting_type_id = mt.id
+           JOIN users u ON mt.user_id = u.id
+           WHERE b.id = $1`,
+          [bookingId]
+        )
+
+        await pool.query(
+          'UPDATE bookings SET status = $1 WHERE id = $2',
           ['cancelled', bookingId]
         )
-        if (result.rows.length > 0) {
-          const booking = result.rows[0]
-          bot.editMessageText(`❌ <b>Встреча отклонена.</b>\n\n👤 ${booking.client_name} будет уведомлён об отмене.`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' })
+
+        if (fullResult.rows.length > 0) {
+          const booking = fullResult.rows[0]
+
+          // Email клиенту с уведомлением
+          try {
+            const { sendBookingCancelledByCoachEmail } = require('./email')
+            const startDate = new Date(booking.start_time)
+            const dateIso = `${startDate.getFullYear()}-${String(startDate.getMonth()+1).padStart(2,'0')}-${String(startDate.getDate()).padStart(2,'0')}`
+            const timeRu = startDate.toTimeString().slice(0, 5)
+            await sendBookingCancelledByCoachEmail(
+              booking.client_email,
+              booking.client_name,
+              booking.meeting_title,
+              dateIso,
+              timeRu,
+              booking.expert_name
+            )
+          } catch (err) {
+            console.error('Email cancelled by coach error:', err)
+          }
+
+          bot.editMessageText(`❌ <b>Встреча отклонена.</b>\n\n👤 ${booking.client_name} получил письмо об отмене.`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' })
         }
       }
 
@@ -140,7 +171,6 @@ const getUserChatId = async (userId) => {
   }
 }
 
-// Новая бронь
 const notifyNewBooking = async (booking, meetingTitle, clientName, clientEmail, date, time, userId, requireConfirm = false) => {
   const chatId = await getUserChatId(userId)
   const message = `
@@ -168,7 +198,6 @@ const notifyNewBooking = async (booking, meetingTitle, clientName, clientEmail, 
   }
 }
 
-// Отмена брони
 const notifyBookingCancelled = async (clientName, meetingTitle, date, time, userId) => {
   const chatId = await getUserChatId(userId)
   await sendToUser(chatId, `
@@ -180,10 +209,9 @@ const notifyBookingCancelled = async (clientName, meetingTitle, date, time, user
 ⏰ <b>Время:</b> ${time}
 
 Слот снова свободен.
-  `)
+`)
 }
 
-// Напоминание за 24 часа
 const notifyReminder24h = async (clientName, meetingTitle, date, time, videoLink, userId) => {
   const chatId = await getUserChatId(userId)
   await sendToUser(chatId, `
@@ -197,7 +225,6 @@ const notifyReminder24h = async (clientName, meetingTitle, date, time, videoLink
   `)
 }
 
-// Напоминание за 1 час
 const notifyReminder1h = async (clientName, meetingTitle, time, videoLink, userId) => {
   const chatId = await getUserChatId(userId)
   await sendToUser(chatId, `
@@ -210,7 +237,6 @@ const notifyReminder1h = async (clientName, meetingTitle, time, videoLink, userI
   `)
 }
 
-// Утренняя сводка
 const notifyDailySummary = async (bookings, userId) => {
   const chatId = await getUserChatId(userId)
   if (bookings.length === 0) {
@@ -225,7 +251,6 @@ ${list}
   `)
 }
 
-// Запрос на перенос — с кнопками
 const notifyRescheduleRequest = async (clientName, meetingTitle, newDate, newTime, bookingId, userId) => {
   const chatId = await getUserChatId(userId)
   await sendToUser(chatId, `
