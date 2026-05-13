@@ -174,11 +174,8 @@ router.patch('/:id/visibility', auth, async (req, res) => {
 })
 
 // DELETE /:id — защита от удаления услуги с записями
-// Если есть хоть одна запись (прошлая/будущая/любая) → 409 has_bookings
-// Если записей нет → удаляем
 router.delete('/:id', auth, async (req, res) => {
   try {
-    // Проверяем что услуга принадлежит юзеру
     const meeting = await pool.query(
       'SELECT id FROM meeting_types WHERE id = $1 AND user_id = $2',
       [req.params.id, req.userId]
@@ -187,14 +184,12 @@ router.delete('/:id', auth, async (req, res) => {
       return res.status(404).json({ error: 'Not found' })
     }
 
-    // Считаем сколько записей привязано к этой услуге
     const bookingsCheck = await pool.query(
       'SELECT COUNT(*) AS count FROM bookings WHERE meeting_type_id = $1',
       [req.params.id]
     )
     const bookingsCount = parseInt(bookingsCheck.rows[0].count, 10)
 
-    // Если есть записи — запрещаем удаление
     if (bookingsCount > 0) {
       return res.status(409).json({
         error: 'has_bookings',
@@ -202,7 +197,6 @@ router.delete('/:id', auth, async (req, res) => {
       })
     }
 
-    // Записей нет — безопасно удаляем
     await pool.query(
       'DELETE FROM meeting_types WHERE id = $1 AND user_id = $2',
       [req.params.id, req.userId]
@@ -274,11 +268,12 @@ router.delete('/single-use/:token', auth, async (req, res) => {
 })
 
 // ============ ПУБЛИЧНЫЕ ENDPOINT'Ы ============
+// Фильтр deleted_at IS NULL — удалённый коуч недоступен для бронирования
 
 router.get('/public/:slug', async (req, res) => {
   try {
     const user = await pool.query(
-      'SELECT id, name, bio, avatar, slug FROM users WHERE slug = $1',
+      'SELECT id, name, bio, avatar, slug FROM users WHERE slug = $1 AND deleted_at IS NULL',
       [req.params.slug]
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'Not found' })
@@ -295,7 +290,7 @@ router.get('/public/:slug', async (req, res) => {
 router.get('/public/:userSlug/:serviceSlug', async (req, res) => {
   try {
     const user = await pool.query(
-      'SELECT id, name, bio, avatar, slug FROM users WHERE slug = $1',
+      'SELECT id, name, bio, avatar, slug FROM users WHERE slug = $1 AND deleted_at IS NULL',
       [req.params.userSlug]
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'User not found' })
@@ -329,7 +324,7 @@ router.get('/once/:token', async (req, res) => {
     if (meeting.rows.length === 0) return res.status(404).json({ error: 'Meeting not found' })
 
     const user = await pool.query(
-      'SELECT id, name, bio, avatar, slug FROM users WHERE id = $1',
+      'SELECT id, name, bio, avatar, slug FROM users WHERE id = $1 AND deleted_at IS NULL',
       [meeting.rows[0].user_id]
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'User not found' })

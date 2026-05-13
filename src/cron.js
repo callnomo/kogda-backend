@@ -75,4 +75,34 @@ cron.schedule('*/30 * * * *', async () => {
   }
 })
 
+// Реальное удаление аккаунтов через 30 дней — каждый день в 3:00 ночи
+// Логика: находим юзеров где scheduled_delete_at прошло — DELETE из users
+// CASCADE удалит все meeting_types, bookings, schedules, schedule_overrides, flexible_schedule
+cron.schedule('0 3 * * *', async () => {
+  try {
+    const result = await pool.query(
+      `SELECT id, email FROM users 
+       WHERE scheduled_delete_at IS NOT NULL 
+         AND scheduled_delete_at < NOW()`
+    )
+
+    if (result.rows.length === 0) {
+      return
+    }
+
+    console.log(`[cron account-purge] Найдено аккаунтов для удаления: ${result.rows.length}`)
+
+    for (const user of result.rows) {
+      try {
+        await pool.query('DELETE FROM users WHERE id = $1', [user.id])
+        console.log(`[cron account-purge] Удалён аккаунт ${user.email} (id=${user.id})`)
+      } catch (err) {
+        console.error(`[cron account-purge] Ошибка удаления ${user.email}:`, err.message)
+      }
+    }
+  } catch (err) {
+    console.error('Cron account-purge error:', err)
+  }
+}, { timezone: 'Asia/Bangkok' })
+
 console.log('Cron jobs запущены!')

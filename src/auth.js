@@ -7,7 +7,8 @@ const pool = require('./db')
 const {
   sendResetPasswordEmail,
   sendVerificationCode,
-  sendEmailTakenWarning
+  sendEmailTakenWarning,
+  sendBookingCancelledByCoachEmail
 } = require('./email')
 const {
   loginLimiter,
@@ -23,12 +24,10 @@ const { logSecurityEvent } = require('./securityLog')
 
 const normalizeEmail = (email) => (email || '').trim().toLowerCase()
 
-// 6-значный код
 const generateCode = () => {
   return Math.floor(100000 + Math.random() * 900000).toString()
 }
 
-// Уникальный slug user-XXXXXXX
 async function generateUniqueSlug() {
   for (let i = 0; i < 5; i++) {
     const random = crypto.randomBytes(4).toString('hex').slice(0, 7)
@@ -368,31 +367,101 @@ router.patch('/change-password', changePasswordLimiter, auth, async (req, res) =
 })
 
 // ===== Удалить аккаунт =====
+// Логика:
+// 1. Проверяем пароль
+// 2. Считаем будущие confirmed-записи
+// 3. Если есть и не пришло confirm_with_bookings=true → 409 с bookings_count
+// 4. Если confirm_with_bookings=true ИЛИ записей нет:
+//    - Отменяем все будущие confirmed (status='cancelled')
+//    - Шлём email каждому клиенту с уведомлением об отмене
+//    - Ставим deleted_at и scheduled_delete_at
 router.delete('/delete-account', deleteAccountLimiter, auth, async (req, res) => {
-  const { password } = req.body
+  const { password, confirm_with_bookings } = req.body
   if (!password) {
     return res.status(400).json({ error: 'Введите пароль для подтверждения' })
   }
   try {
-    const result = await pool.query('SELECT password, email FROM users WHERE id = $1', [req.userId])
+    const result = await pool.query(
+      'SELECT id, password, email, name FROM users WHERE id = $1',
+      [req.userId]
+    )
     if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' })
+    const user = result.rows[0]
 
-    const valid = await bcrypt.compare(password, result.rows[0].password)
+    const valid = await bcrypt.compare(password, user.password)
     if (!valid) return res.status(400).json({ error: 'Неверный пароль' })
 
+    // Считаем будущие confirmed-записи юзера
+    const futureBookings = await pool.query(
+      `SELECT b.id, b.client_email, b.client_name, b.start_time, mt.title AS meeting_title
+       FROM bookings b
+       JOIN meeting_types mt ON b.meeting_type_id = mt.id
+       WHERE mt.user_id = $1
+         AND b.status = 'confirmed'
+         AND b.start_time > NOW()
+       ORDER BY b.start_time`,
+      [user.id]
+    )
+
+    const bookingsCount = futureBookings.rows.length
+
+    // Если есть будущие записи и юзер ещё не подтвердил — возвращаем 409
+    if (bookingsCount > 0 && !confirm_with_bookings) {
+      return res.status(409).json({
+        error: 'has_future_bookings',
+        bookings_count: bookingsCount
+      })
+    }
+
+    // Если есть записи — отменяем и шлём email каждому клиенту
+    if (bookingsCount > 0) {
+      const bookingIds = futureBookings.rows.map(b => b.id)
+      await pool.query(
+        `UPDATE bookings SET status = 'cancelled' WHERE id = ANY($1)`,
+        [bookingIds]
+      )
+
+      for (const b of futureBookings.rows) {
+        const date = new Date(b.start_time)
+        const dateStr = date.toISOString().split('T')[0]
+        const timeStr = date.toTimeString().slice(0, 5)
+        sendBookingCancelledByCoachEmail(
+          b.client_email,
+          b.client_name,
+          b.meeting_title,
+          dateStr,
+          timeStr,
+          user.name
+        )
+      }
+
+      logSecurityEvent(req, {
+        event: 'account_deleted_with_bookings',
+        userId: req.userId,
+        email: user.email,
+        metadata: { bookings_cancelled: bookingsCount }
+      })
+    }
+
+    // Помечаем аккаунт удалённым
     const scheduledDelete = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
     await pool.query(
       'UPDATE users SET deleted_at = NOW(), scheduled_delete_at = $1 WHERE id = $2',
       [scheduledDelete, req.userId]
     )
 
-    logSecurityEvent(req, { event: 'account_deleted', userId: req.userId, email: result.rows[0].email })
-    res.json({ success: true, scheduledDeleteAt: scheduledDelete })
+    logSecurityEvent(req, { event: 'account_deleted', userId: req.userId, email: user.email })
+    res.json({
+      success: true,
+      scheduledDeleteAt: scheduledDelete,
+      cancelledBookings: bookingsCount
+    })
   } catch (err) {
     console.error('Delete account error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 })
+
 // ===== Просмотр security-логов (только для админа) =====
 router.get('/security-logs', auth, async (req, res) => {
   const adminId = parseInt(process.env.ADMIN_USER_ID)
@@ -422,28 +491,14 @@ router.get('/security-logs', auth, async (req, res) => {
     params.push(limit, offset)
 
     const result = await pool.query(
-      `SELECT id, event_type, user_id, email, ip, user_agent, success, metadata, created_at
-       FROM security_logs
-       ${where}
-       ORDER BY created_at DESC
-       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      `SELECT * FROM security_logs ${where} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     )
-
-    const countResult = await pool.query(
-      `SELECT COUNT(*) FROM security_logs ${where}`,
-      params.slice(0, -2)
-    )
-
-    res.json({
-      total: parseInt(countResult.rows[0].count),
-      limit,
-      offset,
-      logs: result.rows,
-    })
+    res.json(result.rows)
   } catch (err) {
-    console.error('security-logs error:', err)
+    console.error('Security logs error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 })
+
 module.exports = router
