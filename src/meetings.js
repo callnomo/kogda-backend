@@ -61,7 +61,13 @@ router.patch('/reorder', auth, async (req, res) => {
 })
 
 router.post('/', auth, async (req, res) => {
-  const { title, description, duration, price, hide_price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy } = req.body
+  const {
+    title, description, duration, price, hide_price, currency,
+    buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day,
+    require_confirm, cancellation_policy,
+    // Новые поля:
+    price_mode, location_type, step_minutes, enabled_payments, enabled_banks
+  } = req.body
   try {
     const baseSlug = makeSlug(title)
     const slug = await makeUniqueSlug(pool, req.userId, baseSlug)
@@ -75,10 +81,18 @@ router.post('/', auth, async (req, res) => {
 
     const result = await pool.query(
       `INSERT INTO meeting_types 
-       (user_id, title, slug, description, duration, price, hide_price, currency, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy, sort_order) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+       (user_id, title, slug, description, duration, price, hide_price, currency,
+        buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day,
+        require_confirm, cancellation_policy, sort_order,
+        price_mode, location_type, step_minutes, enabled_payments, enabled_banks) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+               $17, $18, $19, $20, $21) RETURNING *`,
       [req.userId, title, slug, description, duration, price || 0, hide_price || false, currency || 'RUB',
-       buffer_before || 0, buffer_after || 0, min_notice || 0, max_days_ahead || 60, max_per_day || 0, require_confirm || false, cancellation_policy || null, newSortOrder]
+       buffer_before || 0, buffer_after || 0, min_notice || 0, max_days_ahead || 60, max_per_day || 0,
+       require_confirm || false, cancellation_policy || null, newSortOrder,
+       price_mode || 'amount', location_type || 'video', step_minutes || 30,
+       enabled_payments ? JSON.stringify(enabled_payments) : null,
+       enabled_banks ? JSON.stringify(enabled_banks) : null]
     )
     res.json(result.rows[0])
   } catch (err) {
@@ -88,20 +102,34 @@ router.post('/', auth, async (req, res) => {
 })
 
 router.patch('/:id', auth, async (req, res) => {
-  const { title, description, duration, price, hide_price, buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day, require_confirm, cancellation_policy } = req.body
+  const {
+    title, description, duration, price, hide_price,
+    buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day,
+    require_confirm, cancellation_policy,
+    // Новые поля:
+    price_mode, location_type, step_minutes, enabled_payments, enabled_banks
+  } = req.body
   try {
     const result = await pool.query(
       `UPDATE meeting_types SET 
        title=$1, description=$2, duration=$3, price=$4, hide_price=$5,
        buffer_before=$6, buffer_after=$7, min_notice=$8, max_days_ahead=$9, max_per_day=$10,
-       require_confirm=$11, cancellation_policy=$12
-       WHERE id=$13 AND user_id=$14 RETURNING *`,
+       require_confirm=$11, cancellation_policy=$12,
+       price_mode=$13, location_type=$14, step_minutes=$15,
+       enabled_payments=$16, enabled_banks=$17
+       WHERE id=$18 AND user_id=$19 RETURNING *`,
       [title, description, duration, price, hide_price || false,
        buffer_before || 0, buffer_after || 0,
-       min_notice || 0, max_days_ahead || 60, max_per_day || 0, require_confirm || false, cancellation_policy || null, req.params.id, req.userId]
+       min_notice || 0, max_days_ahead || 60, max_per_day || 0,
+       require_confirm || false, cancellation_policy || null,
+       price_mode || 'amount', location_type || 'video', step_minutes || 30,
+       enabled_payments ? JSON.stringify(enabled_payments) : null,
+       enabled_banks ? JSON.stringify(enabled_banks) : null,
+       req.params.id, req.userId]
     )
     res.json(result.rows[0])
   } catch (err) {
+    console.error('[meetings PATCH]', err)
     res.status(500).json({ error: 'Server error' })
   }
 })
