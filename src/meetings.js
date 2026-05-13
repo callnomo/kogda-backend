@@ -18,8 +18,6 @@ const auth = (req, res, next) => {
 }
 
 // Список полей которые можно обновлять через PATCH /:id
-// Ключ — имя поля в БД; значение — функция нормализации значения перед записью.
-// Если поле отсутствует в req.body — оно не будет обновлено (partial update).
 const PATCHABLE_FIELDS = {
   title: (v) => v,
   description: (v) => v,
@@ -54,7 +52,6 @@ router.get('/', auth, async (req, res) => {
   }
 })
 
-// Изменить порядок услуг. Принимает { order: [id1, id2, id3, ...] } — id в новом порядке.
 router.patch('/reorder', auth, async (req, res) => {
   const { order } = req.body
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be array' })
@@ -121,8 +118,7 @@ router.post('/', auth, async (req, res) => {
   }
 })
 
-// PATCH /:id — partial update. Обновляет только поля которые пришли в req.body.
-// Никаких обязательных полей. Если поле в PATCHABLE_FIELDS и присутствует в body — обновится.
+// PATCH /:id — partial update
 router.patch('/:id', auth, async (req, res) => {
   try {
     const setClauses = []
@@ -138,7 +134,6 @@ router.patch('/:id', auth, async (req, res) => {
     }
 
     if (setClauses.length === 0) {
-      // Ничего не обновляем — просто возвращаем текущее состояние услуги
       const result = await pool.query(
         `SELECT * FROM meeting_types WHERE id = $1 AND user_id = $2`,
         [req.params.id, req.userId]
@@ -178,14 +173,43 @@ router.patch('/:id/visibility', auth, async (req, res) => {
   }
 })
 
+// DELETE /:id — защита от удаления услуги с записями
+// Если есть хоть одна запись (прошлая/будущая/любая) → 409 has_bookings
+// Если записей нет → удаляем
 router.delete('/:id', auth, async (req, res) => {
   try {
+    // Проверяем что услуга принадлежит юзеру
+    const meeting = await pool.query(
+      'SELECT id FROM meeting_types WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.userId]
+    )
+    if (meeting.rows.length === 0) {
+      return res.status(404).json({ error: 'Not found' })
+    }
+
+    // Считаем сколько записей привязано к этой услуге
+    const bookingsCheck = await pool.query(
+      'SELECT COUNT(*) AS count FROM bookings WHERE meeting_type_id = $1',
+      [req.params.id]
+    )
+    const bookingsCount = parseInt(bookingsCheck.rows[0].count, 10)
+
+    // Если есть записи — запрещаем удаление
+    if (bookingsCount > 0) {
+      return res.status(409).json({
+        error: 'has_bookings',
+        bookings_count: bookingsCount
+      })
+    }
+
+    // Записей нет — безопасно удаляем
     await pool.query(
       'DELETE FROM meeting_types WHERE id = $1 AND user_id = $2',
       [req.params.id, req.userId]
     )
     res.json({ success: true })
   } catch (err) {
+    console.error('[meetings DELETE]', err)
     res.status(500).json({ error: 'Server error' })
   }
 })
