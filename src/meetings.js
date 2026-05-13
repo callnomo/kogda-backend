@@ -17,6 +17,29 @@ const auth = (req, res, next) => {
   }
 }
 
+// Список полей которые можно обновлять через PATCH /:id
+// Ключ — имя поля в БД; значение — функция нормализации значения перед записью.
+// Если поле отсутствует в req.body — оно не будет обновлено (partial update).
+const PATCHABLE_FIELDS = {
+  title: (v) => v,
+  description: (v) => v,
+  duration: (v) => v,
+  price: (v) => v,
+  hide_price: (v) => !!v,
+  buffer_before: (v) => v || 0,
+  buffer_after: (v) => v || 0,
+  min_notice: (v) => v || 0,
+  max_days_ahead: (v) => v || 60,
+  max_per_day: (v) => v || 0,
+  require_confirm: (v) => !!v,
+  cancellation_policy: (v) => v || null,
+  price_mode: (v) => v || 'amount',
+  location_type: (v) => v || 'video',
+  step_minutes: (v) => v || 30,
+  enabled_payments: (v) => v ? JSON.stringify(v) : null,
+  enabled_banks: (v) => v ? JSON.stringify(v) : null,
+}
+
 // ============ ОБЫЧНЫЕ ENDPOINT'Ы ДЛЯ УСЛУГ ============
 
 router.get('/', auth, async (req, res) => {
@@ -40,7 +63,6 @@ router.patch('/reorder', auth, async (req, res) => {
   try {
     await client.query('BEGIN')
 
-    // Обновляем sort_order для каждой услуги. Проверяем что услуга принадлежит юзеру.
     for (let i = 0; i < order.length; i++) {
       const id = order[i]
       await client.query(
@@ -65,14 +87,12 @@ router.post('/', auth, async (req, res) => {
     title, description, duration, price, hide_price, currency,
     buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day,
     require_confirm, cancellation_policy,
-    // Новые поля:
     price_mode, location_type, step_minutes, enabled_payments, enabled_banks
   } = req.body
   try {
     const baseSlug = makeSlug(title)
     const slug = await makeUniqueSlug(pool, req.userId, baseSlug)
 
-    // Новая услуга идёт в конец (MAX + 1)
     const maxOrder = await pool.query(
       `SELECT COALESCE(MAX(sort_order), 0) AS max FROM meeting_types WHERE user_id = $1`,
       [req.userId]
@@ -101,32 +121,42 @@ router.post('/', auth, async (req, res) => {
   }
 })
 
+// PATCH /:id — partial update. Обновляет только поля которые пришли в req.body.
+// Никаких обязательных полей. Если поле в PATCHABLE_FIELDS и присутствует в body — обновится.
 router.patch('/:id', auth, async (req, res) => {
-  const {
-    title, description, duration, price, hide_price,
-    buffer_before, buffer_after, min_notice, max_days_ahead, max_per_day,
-    require_confirm, cancellation_policy,
-    // Новые поля:
-    price_mode, location_type, step_minutes, enabled_payments, enabled_banks
-  } = req.body
   try {
+    const setClauses = []
+    const values = []
+    let paramIdx = 1
+
+    for (const field of Object.keys(PATCHABLE_FIELDS)) {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+        setClauses.push(`${field} = $${paramIdx}`)
+        values.push(PATCHABLE_FIELDS[field](req.body[field]))
+        paramIdx++
+      }
+    }
+
+    if (setClauses.length === 0) {
+      // Ничего не обновляем — просто возвращаем текущее состояние услуги
+      const result = await pool.query(
+        `SELECT * FROM meeting_types WHERE id = $1 AND user_id = $2`,
+        [req.params.id, req.userId]
+      )
+      if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' })
+      return res.json(result.rows[0])
+    }
+
+    values.push(req.params.id)
+    values.push(req.userId)
+
     const result = await pool.query(
-      `UPDATE meeting_types SET 
-       title=$1, description=$2, duration=$3, price=$4, hide_price=$5,
-       buffer_before=$6, buffer_after=$7, min_notice=$8, max_days_ahead=$9, max_per_day=$10,
-       require_confirm=$11, cancellation_policy=$12,
-       price_mode=$13, location_type=$14, step_minutes=$15,
-       enabled_payments=$16, enabled_banks=$17
-       WHERE id=$18 AND user_id=$19 RETURNING *`,
-      [title, description, duration, price, hide_price || false,
-       buffer_before || 0, buffer_after || 0,
-       min_notice || 0, max_days_ahead || 60, max_per_day || 0,
-       require_confirm || false, cancellation_policy || null,
-       price_mode || 'amount', location_type || 'video', step_minutes || 30,
-       enabled_payments ? JSON.stringify(enabled_payments) : null,
-       enabled_banks ? JSON.stringify(enabled_banks) : null,
-       req.params.id, req.userId]
+      `UPDATE meeting_types SET ${setClauses.join(', ')} 
+       WHERE id = $${paramIdx} AND user_id = $${paramIdx + 1} RETURNING *`,
+      values
     )
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' })
     res.json(result.rows[0])
   } catch (err) {
     console.error('[meetings PATCH]', err)
