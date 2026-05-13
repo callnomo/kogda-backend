@@ -163,11 +163,15 @@ const sendToUser = async (chatId, message, options = {}) => {
 }
 
 const getUserChatId = async (userId) => {
+  if (!userId) return null
   try {
-    const result = await pool.query('SELECT telegram_chat_id FROM users WHERE id = $1', [userId])
-    return result.rows[0]?.telegram_chat_id || process.env.TELEGRAM_CHAT_ID
+    const result = await pool.query(
+      'SELECT telegram_chat_id FROM users WHERE id = $1 AND deleted_at IS NULL',
+      [userId]
+    )
+    return result.rows[0]?.telegram_chat_id || null
   } catch {
-    return process.env.TELEGRAM_CHAT_ID
+    return null
   }
 }
 
