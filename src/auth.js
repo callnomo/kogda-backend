@@ -134,12 +134,19 @@ async function checkTrustedDevice(userId, deviceToken) {
 }
 
 // Обновляет last_used_at + IP/локацию при успешном использовании
+// city/country перезаписываем ТОЛЬКО если новое значение не пустое
+// (чтобы при логине через VPN/прокси не стереть прежнюю валидную локацию)
 async function touchTrustedDevice(deviceId, req) {
   const { city, country } = getLocationFromRequest(req)
   const ip = getClientIp(req)
   await pool.query(
-    'UPDATE trusted_devices SET last_used_at = NOW(), last_ip = $1, last_city = $2, last_country = $3 WHERE id = $4',
-    [ip, city, country, deviceId]
+    `UPDATE trusted_devices
+     SET last_used_at = NOW(),
+         last_ip = $1,
+         last_city = COALESCE(NULLIF($2, ''), last_city),
+         last_country = COALESCE(NULLIF($3, ''), last_country)
+     WHERE id = $4`,
+    [ip, city || '', country || '', deviceId]
   )
 }
 

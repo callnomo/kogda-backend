@@ -664,9 +664,12 @@ const sendLoginVerificationCode = async (email, code, deviceLabel, city) => {
 const sendNewDeviceLoginNotification = async (email, name, deviceLabel, city, country, ip) => {
   const locationStr = city ? `${city}${country ? ', ' + country : ''}` : (ip || 'неизвестное место')
   const now = new Date()
+  // Показываем время в UTC явно, чтобы юзер понимал в каком оно поясе
   const timeStr = now.toLocaleString('ru-RU', {
-    day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'
-  })
+    day: 'numeric', month: 'long',
+    hour: '2-digit', minute: '2-digit',
+    timeZone: 'UTC',
+  }) + ' UTC'
   try {
     await resend.emails.send({
       from: 'kogDA <noreply@kogda.app>',
