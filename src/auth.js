@@ -584,116 +584,6 @@ router.post('/resend-login-code', resendLoginCodeLimiter, async (req, res) => {
   }
 })
 
-// ============================================================================
-// ===== УПРАВЛЕНИЕ ДОВЕРЕННЫМИ УСТРОЙСТВАМИ =====
-// ============================================================================
-
-// Список устройств юзера
-router.get('/devices', auth, async (req, res) => {
-  try {
-    // Текущий cookie токен — чтобы пометить is_current
-    const cookieToken = parseCookie(req.headers.cookie, 'trusted_device_token')
-
-    const result = await pool.query(
-      `SELECT id, device_label, last_city, last_country, last_used_at, created_at, expires_at,
-              (device_token = $2) AS is_current
-       FROM trusted_devices
-       WHERE user_id = $1 AND expires_at > NOW()
-       ORDER BY (device_token = $2) DESC, last_used_at DESC`,
-      [req.userId, cookieToken || '']
-    )
-
-    // Обновляем last_used_at текущего устройства
-    if (cookieToken) {
-      await pool.query(
-        'UPDATE trusted_devices SET last_used_at = NOW() WHERE user_id = $1 AND device_token = $2',
-        [req.userId, cookieToken]
-      )
-    }
-
-    res.json({ devices: result.rows })
-  } catch (err) {
-    console.error('Get devices error:', err)
-    res.status(500).json({ error: 'Server error' })
-  }
-})
-
-// Отозвать одно устройство
-router.delete('/devices/:id', auth, async (req, res) => {
-  const deviceId = parseInt(req.params.id)
-  if (!deviceId) {
-    return res.status(400).json({ error: 'Invalid device id' })
-  }
-
-  try {
-    // Проверяем что устройство принадлежит этому юзеру
-    const result = await pool.query(
-      'SELECT id, device_token, device_label FROM trusted_devices WHERE id = $1 AND user_id = $2',
-      [deviceId, req.userId]
-    )
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Устройство не найдено' })
-    }
-    const device = result.rows[0]
-
-    // Удаляем
-    await pool.query('DELETE FROM trusted_devices WHERE id = $1', [deviceId])
-
-    // Если удаляли ТЕКУЩЕЕ устройство — стираем cookie
-    const cookieToken = parseCookie(req.headers.cookie, 'trusted_device_token')
-    const isCurrent = device.device_token === cookieToken
-    if (isCurrent) {
-      // Set-Cookie с Max-Age=0 = стирание cookie
-      const isProd = process.env.NODE_ENV === 'production'
-      const parts = [
-        `trusted_device_token=`,
-        `Max-Age=0`,
-        `Path=/`,
-        `HttpOnly`,
-        `SameSite=Lax`,
-      ]
-      if (isProd) parts.push('Secure')
-      res.setHeader('Set-Cookie', parts.join('; '))
-    }
-
-    logSecurityEvent(req, {
-      event: 'device_revoked',
-      userId: req.userId,
-      metadata: { device_label: device.device_label, was_current: isCurrent }
-    })
-
-    res.json({ success: true, was_current: isCurrent })
-  } catch (err) {
-    console.error('Delete device error:', err)
-    res.status(500).json({ error: 'Server error' })
-  }
-})
-
-// Выйти со всех устройств кроме текущего
-router.delete('/devices', auth, async (req, res) => {
-  try {
-    const cookieToken = parseCookie(req.headers.cookie, 'trusted_device_token')
-
-    const result = await pool.query(
-      'DELETE FROM trusted_devices WHERE user_id = $1 AND device_token != $2 RETURNING id',
-      [req.userId, cookieToken || '']
-    )
-
-    logSecurityEvent(req, {
-      event: 'all_devices_revoked',
-      userId: req.userId,
-      metadata: { revoked_count: result.rowCount }
-    })
-
-    res.json({ success: true, revoked_count: result.rowCount })
-  } catch (err) {
-    console.error('Delete all devices error:', err)
-    res.status(500).json({ error: 'Server error' })
-  }
-})
-
-// ============================================================================
-
 // ===== Забыл пароль =====
 router.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
   const email = normalizeEmail(req.body.email)
@@ -1160,5 +1050,115 @@ router.get('/security-logs', auth, async (req, res) => {
     res.status(500).json({ error: 'Server error' })
   }
 })
+
+// ============================================================================
+// ===== УПРАВЛЕНИЕ ДОВЕРЕННЫМИ УСТРОЙСТВАМИ =====
+// ============================================================================
+
+// Список устройств юзера
+router.get('/devices', auth, async (req, res) => {
+  try {
+    // Текущий cookie токен — чтобы пометить is_current
+    const cookieToken = parseCookie(req.headers.cookie, 'trusted_device_token')
+
+    const result = await pool.query(
+      `SELECT id, device_label, last_city, last_country, last_used_at, created_at, expires_at,
+              (device_token = $2) AS is_current
+       FROM trusted_devices
+       WHERE user_id = $1 AND expires_at > NOW()
+       ORDER BY (device_token = $2) DESC, last_used_at DESC`,
+      [req.userId, cookieToken || '']
+    )
+
+    // Обновляем last_used_at текущего устройства
+    if (cookieToken) {
+      await pool.query(
+        'UPDATE trusted_devices SET last_used_at = NOW() WHERE user_id = $1 AND device_token = $2',
+        [req.userId, cookieToken]
+      )
+    }
+
+    res.json({ devices: result.rows })
+  } catch (err) {
+    console.error('Get devices error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Отозвать одно устройство
+router.delete('/devices/:id', auth, async (req, res) => {
+  const deviceId = parseInt(req.params.id)
+  if (!deviceId) {
+    return res.status(400).json({ error: 'Invalid device id' })
+  }
+
+  try {
+    // Проверяем что устройство принадлежит этому юзеру
+    const result = await pool.query(
+      'SELECT id, device_token, device_label FROM trusted_devices WHERE id = $1 AND user_id = $2',
+      [deviceId, req.userId]
+    )
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Устройство не найдено' })
+    }
+    const device = result.rows[0]
+
+    // Удаляем
+    await pool.query('DELETE FROM trusted_devices WHERE id = $1', [deviceId])
+
+    // Если удаляли ТЕКУЩЕЕ устройство — стираем cookie
+    const cookieToken = parseCookie(req.headers.cookie, 'trusted_device_token')
+    const isCurrent = device.device_token === cookieToken
+    if (isCurrent) {
+      // Set-Cookie с Max-Age=0 = стирание cookie
+      const isProd = process.env.NODE_ENV === 'production'
+      const parts = [
+        `trusted_device_token=`,
+        `Max-Age=0`,
+        `Path=/`,
+        `HttpOnly`,
+        `SameSite=Lax`,
+      ]
+      if (isProd) parts.push('Secure')
+      res.setHeader('Set-Cookie', parts.join('; '))
+    }
+
+    logSecurityEvent(req, {
+      event: 'device_revoked',
+      userId: req.userId,
+      metadata: { device_label: device.device_label, was_current: isCurrent }
+    })
+
+    res.json({ success: true, was_current: isCurrent })
+  } catch (err) {
+    console.error('Delete device error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Выйти со всех устройств кроме текущего
+router.delete('/devices', auth, async (req, res) => {
+  try {
+    const cookieToken = parseCookie(req.headers.cookie, 'trusted_device_token')
+
+    const result = await pool.query(
+      'DELETE FROM trusted_devices WHERE user_id = $1 AND device_token != $2 RETURNING id',
+      [req.userId, cookieToken || '']
+    )
+
+    logSecurityEvent(req, {
+      event: 'all_devices_revoked',
+      userId: req.userId,
+      metadata: { revoked_count: result.rowCount }
+    })
+
+    res.json({ success: true, revoked_count: result.rowCount })
+  } catch (err) {
+    console.error('Delete all devices error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// ============================================================================
 
 module.exports = router
