@@ -1085,14 +1085,37 @@ router.get('/devices', auth, async (req, res) => {
   }
 })
 
-// Отозвать одно устройство
+// Отозвать одно устройство (с подтверждением паролем)
 router.delete('/devices/:id', auth, async (req, res) => {
   const deviceId = parseInt(req.params.id)
+  const { password } = req.body
   if (!deviceId) {
     return res.status(400).json({ error: 'Invalid device id' })
   }
+  if (!password) {
+    return res.status(400).json({ error: 'Введи пароль для подтверждения' })
+  }
 
   try {
+    // Проверяем пароль
+    const userResult = await pool.query(
+      'SELECT password, email FROM users WHERE id = $1',
+      [req.userId]
+    )
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' })
+    }
+    const validPassword = await bcrypt.compare(password, userResult.rows[0].password)
+    if (!validPassword) {
+      logSecurityEvent(req, {
+        event: 'device_revoke_failed',
+        userId: req.userId,
+        success: false,
+        metadata: { reason: 'wrong_password', device_id: deviceId }
+      })
+      return res.status(400).json({ error: 'Неверный пароль' })
+    }
+
     // Проверяем что устройство принадлежит этому юзеру
     const result = await pool.query(
       'SELECT id, device_token, device_label FROM trusted_devices WHERE id = $1 AND user_id = $2',
@@ -1110,7 +1133,6 @@ router.delete('/devices/:id', auth, async (req, res) => {
     const cookieToken = parseCookie(req.headers.cookie, 'trusted_device_token')
     const isCurrent = device.device_token === cookieToken
     if (isCurrent) {
-      // Set-Cookie с Max-Age=0 = стирание cookie
       const isProd = process.env.NODE_ENV === 'production'
       const parts = [
         `trusted_device_token=`,
@@ -1136,9 +1158,33 @@ router.delete('/devices/:id', auth, async (req, res) => {
   }
 })
 
-// Выйти со всех устройств кроме текущего
+// Выйти со всех устройств кроме текущего (с подтверждением паролем)
 router.delete('/devices', auth, async (req, res) => {
+  const { password } = req.body
+  if (!password) {
+    return res.status(400).json({ error: 'Введи пароль для подтверждения' })
+  }
+
   try {
+    // Проверяем пароль
+    const userResult = await pool.query(
+      'SELECT password FROM users WHERE id = $1',
+      [req.userId]
+    )
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' })
+    }
+    const validPassword = await bcrypt.compare(password, userResult.rows[0].password)
+    if (!validPassword) {
+      logSecurityEvent(req, {
+        event: 'all_devices_revoke_failed',
+        userId: req.userId,
+        success: false,
+        metadata: { reason: 'wrong_password' }
+      })
+      return res.status(400).json({ error: 'Неверный пароль' })
+    }
+
     const cookieToken = parseCookie(req.headers.cookie, 'trusted_device_token')
 
     const result = await pool.query(
