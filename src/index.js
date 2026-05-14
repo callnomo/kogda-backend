@@ -15,7 +15,25 @@ require('./cron')
 
 const app = express()
 app.set('trust proxy', 1)
-app.use(cors())
+
+// CORS с credentials — нужно для отправки/приёма httpOnly cookie trusted_device_token
+// Разрешаем конкретные origins (с протоколом, без слеша на конце)
+const ALLOWED_ORIGINS = [
+  'https://app.kogda.app',
+  'https://kogda.app',
+  'http://localhost:3000', // локальная разработка
+]
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // origin может быть undefined для same-origin запросов или curl/Postman — пропускаем
+    if (!origin) return callback(null, true)
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true)
+    callback(new Error(`CORS blocked: ${origin}`))
+  },
+  credentials: true,
+}))
+
 app.use(express.json())
 
 app.use('/auth', authRoutes)
