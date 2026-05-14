@@ -344,7 +344,7 @@ const sendEmailTakenWarning = async (email, name) => {
   }
 }
 
-// ===== НОВОЕ: отмена записи клиенту (когда коуч удаляет аккаунт) =====
+// ===== Отмена записи клиенту (когда коуч удаляет аккаунт) =====
 const sendBookingCancelledByCoachEmail = async (clientEmail, clientName, meetingTitle, date, time, expertName) => {
   try {
     await resend.emails.send({
@@ -406,7 +406,7 @@ const sendBookingCancelledByCoachEmail = async (clientEmail, clientName, meeting
   }
 }
 
-// ===== НОВОЕ: подтверждение удаления аккаунта коучу =====
+// ===== Подтверждение удаления аккаунта коучу =====
 const sendAccountDeletionEmail = async (email, name, scheduledDeleteDate, cancelledBookingsCount) => {
   try {
     const date = new Date(scheduledDeleteDate)
@@ -481,6 +481,120 @@ const sendAccountDeletionEmail = async (email, name, scheduledDeleteDate, cancel
   }
 }
 
+// ===== НОВОЕ: код подтверждения смены email (на НОВЫЙ адрес) =====
+const sendEmailChangeCode = async (newEmail, code) => {
+  try {
+    await resend.emails.send({
+      from: 'kogDA <noreply@kogda.app>',
+      to: newEmail,
+      subject: `${code} — код подтверждения нового email`,
+      html: `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;padding:0 20px;">
+    ${LOGO_HTML}
+    <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
+      ${iconCircle('✉️')}
+
+      <h1 style="text-align:center;font-size:24px;font-weight:800;color:#111;margin:0 0 8px;">
+        Подтверди новый email
+      </h1>
+      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 32px;">
+        Кто-то хочет привязать этот email к аккаунту в kogDA. Если это ты — введи код в настройках.
+      </p>
+
+      <div style="background:#F7F6F1;border-radius:16px;padding:32px;margin-bottom:24px;text-align:center;">
+        <div style="font-size:42px;font-weight:800;color:#111;letter-spacing:8px;font-family:'SF Mono',Menlo,Monaco,Consolas,monospace;">
+          ${code}
+        </div>
+      </div>
+
+      <div style="background:#F7F6F1;border-radius:12px;padding:16px;">
+        <p style="margin:0;color:#888;font-size:13px;line-height:1.6;">
+          Код действителен <b style="color:#111;">10 минут</b>. Если ты не запрашивал — просто проигнорируй это письмо.
+        </p>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:24px;">
+      <p style="color:#aaa;font-size:12px;">Письмо отправлено через kogDA</p>
+    </div>
+  </div>
+</body>
+</html>
+      `
+    })
+    console.log('Email change code отправлен:', newEmail)
+  } catch (err) {
+    console.error('Email change code error:', err.message)
+  }
+}
+
+// ===== НОВОЕ: уведомление о смене email (на СТАРЫЙ адрес для безопасности) =====
+const sendEmailChangedNotification = async (oldEmail, name, newEmailMasked) => {
+  try {
+    await resend.emails.send({
+      from: 'kogDA <noreply@kogda.app>',
+      to: oldEmail,
+      subject: 'Email в kogDA изменён',
+      html: `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;padding:0 20px;">
+    ${LOGO_HTML}
+    <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
+      ${iconCircle('🔒')}
+
+      <h1 style="text-align:center;font-size:22px;font-weight:800;color:#111;margin:0 0 8px;">
+        Email в kogDA изменён
+      </h1>
+      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 28px;">
+        ${name ? `${name}, ` : ''}email твоего аккаунта изменён на <b style="color:#111;">${newEmailMasked}</b>.
+      </p>
+
+      <div style="background:#F7F6F1;border-radius:12px;padding:16px;margin-bottom:20px;">
+        <p style="margin:0 0 8px;color:#111;font-size:14px;font-weight:600;">
+          Это был ты?
+        </p>
+        <p style="margin:0;color:#888;font-size:13px;line-height:1.6;">
+          Используй новый email для входа. Это письмо — просто уведомление, ничего делать не нужно.
+        </p>
+      </div>
+
+      <div style="background:#FEF3C7;border-radius:12px;padding:16px;margin-bottom:24px;">
+        <p style="margin:0 0 8px;color:#92400E;font-size:14px;font-weight:600;">
+          ⚠️ Это был не ты?
+        </p>
+        <p style="margin:0;color:#92400E;font-size:13px;line-height:1.6;">
+          Срочно напиши на <a href="mailto:veneracode@gmail.com" style="color:#92400E;font-weight:600;">veneracode@gmail.com</a> — мы откатим изменение.
+        </p>
+      </div>
+
+      <p style="color:#aaa;font-size:12px;text-align:center;margin:0;line-height:1.6;">
+        Письмо отправлено через kogDA для безопасности.
+      </p>
+    </div>
+  </div>
+</body>
+</html>
+      `
+    })
+    console.log('Email changed notification отправлен:', oldEmail)
+  } catch (err) {
+    console.error('Email changed notification error:', err.message)
+  }
+}
+
 module.exports = {
   sendBookingConfirmation,
   sendReminder,
@@ -489,5 +603,7 @@ module.exports = {
   sendVerificationCode,
   sendEmailTakenWarning,
   sendBookingCancelledByCoachEmail,
-  sendAccountDeletionEmail
+  sendAccountDeletionEmail,
+  sendEmailChangeCode,
+  sendEmailChangedNotification,
 }

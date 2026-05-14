@@ -8,7 +8,10 @@ const {
   sendResetPasswordEmail,
   sendVerificationCode,
   sendEmailTakenWarning,
-  sendBookingCancelledByCoachEmail
+  sendBookingCancelledByCoachEmail,
+  sendAccountDeletionEmail,
+  sendEmailChangeCode,
+  sendEmailChangedNotification,
 } = require('./email')
 const {
   loginLimiter,
@@ -19,6 +22,8 @@ const {
   resetPasswordLimiter,
   changePasswordLimiter,
   deleteAccountLimiter,
+  requestEmailChangeLimiter,
+  verifyEmailChangeLimiter,
 } = require('./rateLimiters')
 const { logSecurityEvent } = require('./securityLog')
 
@@ -366,6 +371,215 @@ router.patch('/change-password', changePasswordLimiter, auth, async (req, res) =
   }
 })
 
+// ============================================================================
+// ===== СМЕНА EMAIL (НОВОЕ) =====
+// ============================================================================
+
+// Шаг 1: запросить код для смены email
+router.post('/request-email-change', requestEmailChangeLimiter, auth, async (req, res) => {
+  const newEmail = normalizeEmail(req.body.newEmail)
+  const { currentPassword } = req.body
+
+  if (!newEmail || !currentPassword) {
+    return res.status(400).json({ error: 'Заполни все поля' })
+  }
+  if (!newEmail.includes('@') || !newEmail.includes('.')) {
+    return res.status(400).json({ error: 'Введи корректный email' })
+  }
+
+  try {
+    const userResult = await pool.query(
+      'SELECT id, email, password, name FROM users WHERE id = $1 AND deleted_at IS NULL',
+      [req.userId]
+    )
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' })
+    }
+    const user = userResult.rows[0]
+
+    // Новый email не должен совпадать со старым
+    if (newEmail === user.email.toLowerCase()) {
+      return res.status(400).json({ error: 'Это твой текущий email' })
+    }
+
+    // Проверяем пароль
+    const validPassword = await bcrypt.compare(currentPassword, user.password)
+    if (!validPassword) {
+      logSecurityEvent(req, {
+        event: 'email_change_failed',
+        userId: user.id,
+        email: user.email,
+        success: false,
+        metadata: { reason: 'wrong_password', new_email: newEmail }
+      })
+      return res.status(400).json({ error: 'Неверный пароль' })
+    }
+
+    // Новый email не должен быть занят
+    const existing = await pool.query(
+      'SELECT id FROM users WHERE LOWER(email) = $1 AND deleted_at IS NULL',
+      [newEmail]
+    )
+    if (existing.rows.length > 0) {
+      logSecurityEvent(req, {
+        event: 'email_change_failed',
+        userId: user.id,
+        email: user.email,
+        success: false,
+        metadata: { reason: 'email_taken', new_email: newEmail }
+      })
+      return res.status(400).json({ error: 'Этот email уже занят' })
+    }
+
+    // Генерируем код и кладём в БД (UPSERT — новый запрос затирает старый)
+    const code = generateCode()
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000)
+
+    await pool.query(`
+      INSERT INTO pending_email_changes (user_id, new_email, code, code_expires_at, attempts, created_at)
+      VALUES ($1, $2, $3, $4, 0, NOW())
+      ON CONFLICT (user_id)
+      DO UPDATE SET new_email = $2, code = $3, code_expires_at = $4, attempts = 0, created_at = NOW()
+    `, [user.id, newEmail, code, expiresAt])
+
+    // Шлём код на НОВЫЙ email
+    await sendEmailChangeCode(newEmail, code)
+
+    logSecurityEvent(req, {
+      event: 'email_change_requested',
+      userId: user.id,
+      email: user.email,
+      metadata: { new_email: newEmail }
+    })
+
+    res.json({ success: true, newEmail })
+  } catch (err) {
+    console.error('request-email-change error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Шаг 2: подтвердить код и сменить email
+router.post('/verify-email-change', verifyEmailChangeLimiter, auth, async (req, res) => {
+  const { code } = req.body
+
+  if (!code) {
+    return res.status(400).json({ error: 'Введи код' })
+  }
+
+  try {
+    const pendingResult = await pool.query(
+      'SELECT * FROM pending_email_changes WHERE user_id = $1',
+      [req.userId]
+    )
+    if (pendingResult.rows.length === 0) {
+      return res.status(400).json({ error: 'Запрос не найден. Начни сначала.', expired: true })
+    }
+    const pending = pendingResult.rows[0]
+
+    // Проверка срока
+    if (new Date(pending.code_expires_at) < new Date()) {
+      await pool.query('DELETE FROM pending_email_changes WHERE user_id = $1', [req.userId])
+      logSecurityEvent(req, {
+        event: 'email_change_failed',
+        userId: req.userId,
+        success: false,
+        metadata: { reason: 'expired' }
+      })
+      return res.status(400).json({ error: 'Код устарел. Запроси новый.', expired: true })
+    }
+
+    // Проверка количества попыток
+    if (pending.attempts >= 3) {
+      await pool.query('DELETE FROM pending_email_changes WHERE user_id = $1', [req.userId])
+      logSecurityEvent(req, {
+        event: 'email_change_failed',
+        userId: req.userId,
+        success: false,
+        metadata: { reason: 'too_many_attempts' }
+      })
+      return res.status(400).json({ error: 'Слишком много попыток. Запроси код заново.', expired: true })
+    }
+
+    // Проверка кода
+    if (pending.code !== code.toString()) {
+      await pool.query(
+        'UPDATE pending_email_changes SET attempts = attempts + 1 WHERE user_id = $1',
+        [req.userId]
+      )
+      const remaining = 2 - pending.attempts
+      logSecurityEvent(req, {
+        event: 'email_change_failed',
+        userId: req.userId,
+        success: false,
+        metadata: { reason: 'wrong_code', attempts: pending.attempts + 1 }
+      })
+      return res.status(400).json({
+        error: `Неверный код. Осталось попыток: ${remaining}`
+      })
+    }
+
+    // Перепроверяем что новый email всё ещё свободен
+    // (мог занять кто-то пока юзер вводил код)
+    const occupied = await pool.query(
+      'SELECT id FROM users WHERE LOWER(email) = $1 AND deleted_at IS NULL AND id != $2',
+      [pending.new_email, req.userId]
+    )
+    if (occupied.rows.length > 0) {
+      await pool.query('DELETE FROM pending_email_changes WHERE user_id = $1', [req.userId])
+      return res.status(400).json({ error: 'Этот email уже занят. Запроси другой.' })
+    }
+
+    // Получаем старый email и имя для уведомления
+    const userResult = await pool.query(
+      'SELECT email, name FROM users WHERE id = $1',
+      [req.userId]
+    )
+    const oldEmail = userResult.rows[0].email
+    const userName = userResult.rows[0].name
+
+    // Меняем email в БД
+    await pool.query(
+      'UPDATE users SET email = $1 WHERE id = $2',
+      [pending.new_email, req.userId]
+    )
+
+    // Удаляем запрос
+    await pool.query('DELETE FROM pending_email_changes WHERE user_id = $1', [req.userId])
+
+    // Маскируем новый email: nomo@email.com → n***@email.com
+    const [localPart, domain] = pending.new_email.split('@')
+    const maskedEmail = `${localPart[0]}${'*'.repeat(Math.max(localPart.length - 1, 3))}@${domain}`
+
+    // Шлём уведомление на СТАРЫЙ email
+    await sendEmailChangedNotification(oldEmail, userName, maskedEmail)
+
+    logSecurityEvent(req, {
+      event: 'email_changed',
+      userId: req.userId,
+      email: pending.new_email,
+      metadata: { old_email: oldEmail }
+    })
+
+    res.json({ success: true, new_email: pending.new_email })
+  } catch (err) {
+    console.error('verify-email-change error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Отмена запроса (если юзер закрыл модалку)
+router.delete('/cancel-email-change', auth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM pending_email_changes WHERE user_id = $1', [req.userId])
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// ============================================================================
+
 // ===== Удалить аккаунт =====
 // Логика:
 // 1. Проверяем пароль
@@ -449,6 +663,9 @@ router.delete('/delete-account', deleteAccountLimiter, auth, async (req, res) =>
       'UPDATE users SET deleted_at = NOW(), scheduled_delete_at = $1 WHERE id = $2',
       [scheduledDelete, req.userId]
     )
+
+    // Email коучу с подтверждением и инструкцией по восстановлению
+    sendAccountDeletionEmail(user.email, user.name, scheduledDelete, bookingsCount)
 
     logSecurityEvent(req, { event: 'account_deleted', userId: req.userId, email: user.email })
     res.json({

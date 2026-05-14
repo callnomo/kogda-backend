@@ -73,6 +73,24 @@ const deleteAccountLimiter = rateLimit({
   legacyHeaders: false,
 })
 
+// Запрос смены email — 3 за час (защита от спама писем)
+const requestEmailChangeLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  message: { error: 'Слишком много запросов смены email. Попробуй через час.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+// Проверка кода смены email — 10 за 15 минут с IP
+const verifyEmailChangeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Слишком много попыток. Попробуй через 15 минут.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
 module.exports = {
   loginLimiter,
   requestCodeLimiter,
@@ -82,4 +100,6 @@ module.exports = {
   resetPasswordLimiter,
   changePasswordLimiter,
   deleteAccountLimiter,
+  requestEmailChangeLimiter,
+  verifyEmailChangeLimiter,
 }
