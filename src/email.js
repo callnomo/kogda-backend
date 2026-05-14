@@ -595,6 +595,151 @@ const sendEmailChangedNotification = async (oldEmail, name, newEmailMasked) => {
   }
 }
 
+// ===== НОВОЕ: код подтверждения логина с нового устройства =====
+const sendLoginVerificationCode = async (email, code, deviceLabel, city) => {
+  const locationStr = city ? ` из ${city}` : ''
+  const deviceStr = deviceLabel || 'нового устройства'
+  try {
+    await resend.emails.send({
+      from: 'kogDA <noreply@kogda.app>',
+      to: email,
+      subject: `${code} — код для входа в kogDA`,
+      html: `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;padding:0 20px;">
+    ${LOGO_HTML}
+    <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
+      ${iconCircle('🔐')}
+
+      <h1 style="text-align:center;font-size:24px;font-weight:800;color:#111;margin:0 0 8px;">
+        Подтверди вход
+      </h1>
+      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 32px;line-height:1.5;">
+        Кто-то пытается войти в твой kogDA с <b style="color:#111;">${deviceStr}</b>${locationStr}.
+      </p>
+
+      <div style="background:#F7F6F1;border-radius:16px;padding:32px;margin-bottom:24px;text-align:center;">
+        <div style="font-size:42px;font-weight:800;color:#111;letter-spacing:8px;font-family:'SF Mono',Menlo,Monaco,Consolas,monospace;">
+          ${code}
+        </div>
+      </div>
+
+      <div style="background:#F7F6F1;border-radius:12px;padding:16px;margin-bottom:16px;">
+        <p style="margin:0;color:#888;font-size:13px;line-height:1.6;">
+          Код действителен <b style="color:#111;">10 минут</b>. Введи его на странице входа.
+        </p>
+      </div>
+
+      <div style="background:#FEF3C7;border-radius:12px;padding:16px;">
+        <p style="margin:0 0 8px;color:#92400E;font-size:14px;font-weight:600;">
+          ⚠️ Это был не ты?
+        </p>
+        <p style="margin:0;color:#92400E;font-size:13px;line-height:1.6;">
+          Не вводи код. Кто-то знает твой пароль — срочно <a href="https://app.kogda.app/forgot-password" style="color:#92400E;font-weight:600;">смени его</a>.
+        </p>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:24px;">
+      <p style="color:#aaa;font-size:12px;">Письмо отправлено через kogDA</p>
+    </div>
+  </div>
+</body>
+</html>
+      `
+    })
+    console.log('Login verification code отправлен:', email)
+  } catch (err) {
+    console.error('Login verification code error:', err.message)
+  }
+}
+
+// ===== НОВОЕ: уведомление об успешном входе с нового устройства =====
+const sendNewDeviceLoginNotification = async (email, name, deviceLabel, city, country, ip) => {
+  const locationStr = city ? `${city}${country ? ', ' + country : ''}` : (ip || 'неизвестное место')
+  const now = new Date()
+  const timeStr = now.toLocaleString('ru-RU', {
+    day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit'
+  })
+  try {
+    await resend.emails.send({
+      from: 'kogDA <noreply@kogda.app>',
+      to: email,
+      subject: 'Новый вход в kogDA',
+      html: `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;padding:0 20px;">
+    ${LOGO_HTML}
+    <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
+      ${iconCircle('🔓')}
+
+      <h1 style="text-align:center;font-size:22px;font-weight:800;color:#111;margin:0 0 8px;">
+        Новый вход в kogDA
+      </h1>
+      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 28px;">
+        ${name ? `${name}, ` : ''}в твой аккаунт вошли с нового устройства.
+      </p>
+
+      <div style="background:#F7F6F1;border-radius:16px;padding:24px;margin-bottom:24px;">
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Устройство</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${deviceLabel || 'Неизвестно'}</div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Локация</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${locationStr}</div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Когда</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${timeStr}</div>
+        </div>
+      </div>
+
+      <div style="background:#F7F6F1;border-radius:12px;padding:16px;margin-bottom:16px;">
+        <p style="margin:0 0 8px;color:#111;font-size:14px;font-weight:600;">
+          Это был ты?
+        </p>
+        <p style="margin:0;color:#888;font-size:13px;line-height:1.6;">
+          Отлично, тогда ничего делать не нужно. Это письмо — просто для безопасности.
+        </p>
+      </div>
+
+      <div style="background:#FEF3C7;border-radius:12px;padding:16px;margin-bottom:24px;">
+        <p style="margin:0 0 8px;color:#92400E;font-size:14px;font-weight:600;">
+          ⚠️ Это был не ты?
+        </p>
+        <p style="margin:0;color:#92400E;font-size:13px;line-height:1.6;">
+          Срочно <a href="https://app.kogda.app/forgot-password" style="color:#92400E;font-weight:600;">смени пароль</a> и зайди в Настройки → Безопасность → отзови это устройство. Если что-то непонятно — напиши на <a href="mailto:support@kogda.app" style="color:#92400E;font-weight:600;">support@kogda.app</a>.
+        </p>
+      </div>
+
+      <p style="color:#aaa;font-size:12px;text-align:center;margin:0;line-height:1.6;">
+        Уведомление о безопасности от kogDA
+      </p>
+    </div>
+  </div>
+</body>
+</html>
+      `
+    })
+    console.log('New device login notification отправлен:', email)
+  } catch (err) {
+    console.error('New device login notification error:', err.message)
+  }
+}
+
 module.exports = {
   sendBookingConfirmation,
   sendReminder,
@@ -606,4 +751,6 @@ module.exports = {
   sendAccountDeletionEmail,
   sendEmailChangeCode,
   sendEmailChangedNotification,
+  sendLoginVerificationCode,
+  sendNewDeviceLoginNotification,
 }

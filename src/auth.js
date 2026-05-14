@@ -12,6 +12,8 @@ const {
   sendAccountDeletionEmail,
   sendEmailChangeCode,
   sendEmailChangedNotification,
+  sendLoginVerificationCode,
+  sendNewDeviceLoginNotification,
 } = require('./email')
 const {
   loginLimiter,
@@ -24,6 +26,8 @@ const {
   deleteAccountLimiter,
   requestEmailChangeLimiter,
   verifyEmailChangeLimiter,
+  verifyLoginCodeLimiter,
+  resendLoginCodeLimiter,
 } = require('./rateLimiters')
 const { logSecurityEvent } = require('./securityLog')
 
@@ -41,6 +45,128 @@ async function generateUniqueSlug() {
     if (exists.rows.length === 0) return slug
   }
   return `user-${crypto.randomBytes(4).toString('hex').slice(0, 7)}-${Date.now().toString(36)}`
+}
+
+// ============================================================================
+// ===== ХЕЛПЕРЫ ДЛЯ TRUSTED DEVICES =====
+// ============================================================================
+
+const TRUSTED_DEVICE_DAYS = 90
+
+// Парсер user-agent → "iPhone Safari", "Mac Chrome" и т.д.
+function parseUserAgent(ua) {
+  if (!ua) return 'Неизвестное устройство'
+  ua = String(ua)
+
+  // Платформа
+  let platform = 'Устройство'
+  if (/iPhone/i.test(ua)) platform = 'iPhone'
+  else if (/iPad/i.test(ua)) platform = 'iPad'
+  else if (/Android/i.test(ua)) platform = 'Android'
+  else if (/Macintosh|Mac OS X/i.test(ua)) platform = 'Mac'
+  else if (/Windows/i.test(ua)) platform = 'Windows'
+  else if (/Linux/i.test(ua)) platform = 'Linux'
+
+  // Браузер (порядок важен: проверяем edge раньше chrome, opera раньше chrome)
+  let browser = ''
+  if (/Edg\//i.test(ua)) browser = 'Edge'
+  else if (/OPR\/|Opera/i.test(ua)) browser = 'Opera'
+  else if (/Firefox\//i.test(ua)) browser = 'Firefox'
+  else if (/Chrome\//i.test(ua) && !/Edg\//i.test(ua)) browser = 'Chrome'
+  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari'
+
+  return browser ? `${platform} ${browser}` : platform
+}
+
+// Получаем локацию из Cloudflare заголовков
+function getLocationFromRequest(req) {
+  const city = req.headers['cf-ipcity'] || null
+  const country = req.headers['cf-ipcountry'] || null
+  // Декодируем URL-encoded (Cloudflare шлёт "St. Petersburg" как "St.%20Petersburg")
+  const decodedCity = city ? decodeURIComponent(city) : null
+  return {
+    city: decodedCity,
+    country: country && country !== 'XX' ? country : null,
+  }
+}
+
+// Получаем IP клиента
+function getClientIp(req) {
+  return req.headers['cf-connecting-ip'] ||
+         req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+         req.socket?.remoteAddress ||
+         null
+}
+
+// Создаёт запись trusted device и возвращает device_token для cookie
+async function createTrustedDevice(userId, req) {
+  const ua = req.headers['user-agent'] || ''
+  const { city, country } = getLocationFromRequest(req)
+  const ip = getClientIp(req)
+  const deviceLabel = parseUserAgent(ua)
+  const deviceToken = crypto.randomBytes(48).toString('hex')
+  const expiresAt = new Date(Date.now() + TRUSTED_DEVICE_DAYS * 24 * 60 * 60 * 1000)
+
+  await pool.query(`
+    INSERT INTO trusted_devices
+      (user_id, device_token, user_agent, device_label, last_ip, last_city, last_country, last_used_at, expires_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
+  `, [userId, deviceToken, ua, deviceLabel, ip, city, country, expiresAt])
+
+  return { deviceToken, deviceLabel, city, country, ip }
+}
+
+// Проверяет cookie на валидность. Возвращает { valid, deviceId } или null
+async function checkTrustedDevice(userId, deviceToken) {
+  if (!deviceToken) return null
+  const result = await pool.query(
+    'SELECT id, expires_at FROM trusted_devices WHERE user_id = $1 AND device_token = $2',
+    [userId, deviceToken]
+  )
+  if (result.rows.length === 0) return null
+  const device = result.rows[0]
+  if (new Date(device.expires_at) < new Date()) {
+    // Истёк — чистим
+    await pool.query('DELETE FROM trusted_devices WHERE id = $1', [device.id])
+    return null
+  }
+  return { valid: true, deviceId: device.id }
+}
+
+// Обновляет last_used_at + IP/локацию при успешном использовании
+async function touchTrustedDevice(deviceId, req) {
+  const { city, country } = getLocationFromRequest(req)
+  const ip = getClientIp(req)
+  await pool.query(
+    'UPDATE trusted_devices SET last_used_at = NOW(), last_ip = $1, last_city = $2, last_country = $3 WHERE id = $4',
+    [ip, city, country, deviceId]
+  )
+}
+
+// Парсит конкретное значение cookie из заголовка `Cookie`
+function parseCookie(cookieHeader, name) {
+  if (!cookieHeader) return null
+  const parts = cookieHeader.split(';')
+  for (const part of parts) {
+    const [k, ...rest] = part.trim().split('=')
+    if (k === name) return rest.join('=')
+  }
+  return null
+}
+
+// Ставит cookie руками через Set-Cookie header
+function setTrustedCookie(res, token) {
+  const maxAge = TRUSTED_DEVICE_DAYS * 24 * 60 * 60 // секунды
+  const isProd = process.env.NODE_ENV === 'production'
+  const parts = [
+    `trusted_device_token=${token}`,
+    `Max-Age=${maxAge}`,
+    `Path=/`,
+    `HttpOnly`,
+    `SameSite=Lax`,
+  ]
+  if (isProd) parts.push('Secure')
+  res.setHeader('Set-Cookie', parts.join('; '))
 }
 
 // ===== ШАГ 1: Запросить код =====
@@ -190,6 +316,11 @@ router.post('/complete-registration', completeRegistrationLimiter, async (req, r
     const user = result.rows[0]
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '30d' })
 
+    // НОВОЕ: после регистрации этот девайс автоматически доверенный
+    // (юзер только что прошёл email-верификацию)
+    const { deviceToken } = await createTrustedDevice(user.id, req)
+    setTrustedCookie(res, deviceToken)
+
     logSecurityEvent(req, { event: 'register_complete', userId: user.id, email })
     res.json({ token, user })
   } catch (err) {
@@ -207,6 +338,12 @@ router.post('/register', async (req, res) => {
 })
 
 // ===== Логин =====
+// Логика:
+// 1. Проверяем email+пароль
+// 2. Если deleted_at → восстанавливаем (как было)
+// 3. НОВОЕ: проверяем trusted_device cookie
+//    - Если есть и валиден → выдаём JWT, обновляем last_used
+//    - Если нет → создаём pending_login, шлём код на email, возвращаем { requires_verification: true, user_id }
 router.post('/login', loginLimiter, async (req, res) => {
   const email = normalizeEmail(req.body.email)
   const { password } = req.body
@@ -218,6 +355,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
     const user = result.rows[0]
 
+    // Восстановление удалённого аккаунта (старая логика)
     if (user.deleted_at) {
       const validPassword = await bcrypt.compare(password, user.password)
       if (!validPassword) {
@@ -228,6 +366,10 @@ router.post('/login', loginLimiter, async (req, res) => {
         'UPDATE users SET deleted_at = NULL, scheduled_delete_at = NULL WHERE id = $1',
         [user.id]
       )
+      // При восстановлении сразу создаём trusted device — юзер прошёл пароль
+      const { deviceToken } = await createTrustedDevice(user.id, req)
+      setTrustedCookie(res, deviceToken)
+
       const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '30d' })
       logSecurityEvent(req, { event: 'account_restored', userId: user.id, email })
       return res.json({
@@ -237,16 +379,207 @@ router.post('/login', loginLimiter, async (req, res) => {
       })
     }
 
+    // Проверка пароля
     const validPassword = await bcrypt.compare(password, user.password)
     if (!validPassword) {
       logSecurityEvent(req, { event: 'login_failed', userId: user.id, email, success: false, metadata: { reason: 'wrong_password' } })
       return res.status(400).json({ error: 'Invalid email or password' })
     }
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '30d' })
-    logSecurityEvent(req, { event: 'login_success', userId: user.id, email })
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, slug: user.slug } })
+
+    // НОВОЕ: проверка trusted_device cookie (читаем вручную из заголовка)
+    const cookieToken = parseCookie(req.headers.cookie, 'trusted_device_token')
+    const trusted = await checkTrustedDevice(user.id, cookieToken)
+
+    if (trusted) {
+      // Устройство доверенное — пускаем сразу
+      await touchTrustedDevice(trusted.deviceId, req)
+      const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '30d' })
+      logSecurityEvent(req, { event: 'login_success', userId: user.id, email, metadata: { trusted_device: true } })
+      return res.json({ token, user: { id: user.id, name: user.name, email: user.email, slug: user.slug } })
+    }
+
+    // НОВОЕ: устройство не доверенное → создаём pending_login и шлём код
+    const code = generateCode()
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000)
+    const ua = req.headers['user-agent'] || ''
+    const { city, country } = getLocationFromRequest(req)
+    const ip = getClientIp(req)
+    const deviceLabel = parseUserAgent(ua)
+
+    await pool.query(`
+      INSERT INTO pending_logins (user_id, code, code_expires_at, attempts, user_agent, ip, city, country, created_at)
+      VALUES ($1, $2, $3, 0, $4, $5, $6, $7, NOW())
+      ON CONFLICT (user_id)
+      DO UPDATE SET code = $2, code_expires_at = $3, attempts = 0,
+        user_agent = $4, ip = $5, city = $6, country = $7, created_at = NOW()
+    `, [user.id, code, expiresAt, ua, ip, city, country])
+
+    await sendLoginVerificationCode(user.email, code, deviceLabel, city)
+
+    logSecurityEvent(req, {
+      event: 'login_verification_required',
+      userId: user.id, email,
+      metadata: { device: deviceLabel, city, country, ip }
+    })
+
+    // Возвращаем сигнал что нужна верификация
+    // user_id нужен фронту для отправки на /verify-login
+    res.json({
+      requires_verification: true,
+      user_id: user.id,
+      // Маскируем email для подсказки на фронте: nomo@gmail.com → n***@gmail.com
+      email_hint: maskEmail(user.email),
+      device_label: deviceLabel,
+    })
   } catch (err) {
-    console.error(err)
+    console.error('Login error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Хелпер: маскирование email для безопасного показа на фронте
+function maskEmail(email) {
+  if (!email) return ''
+  const [local, domain] = email.split('@')
+  if (!domain) return email
+  const masked = local[0] + '*'.repeat(Math.max(local.length - 1, 3))
+  return `${masked}@${domain}`
+}
+
+// ===== Подтверждение логина кодом =====
+// На вход: { user_id, code }
+// Если код верен → JWT + trusted_device cookie + уведомление о новом входе
+router.post('/verify-login', verifyLoginCodeLimiter, async (req, res) => {
+  const { user_id, code } = req.body
+  if (!user_id || !code) {
+    return res.status(400).json({ error: 'Заполни поля' })
+  }
+
+  try {
+    const pendingResult = await pool.query(
+      'SELECT * FROM pending_logins WHERE user_id = $1',
+      [user_id]
+    )
+    if (pendingResult.rows.length === 0) {
+      return res.status(400).json({ error: 'Запроси код заново', expired: true })
+    }
+    const pending = pendingResult.rows[0]
+
+    // Срок
+    if (new Date(pending.code_expires_at) < new Date()) {
+      await pool.query('DELETE FROM pending_logins WHERE user_id = $1', [user_id])
+      logSecurityEvent(req, {
+        event: 'login_verification_failed',
+        userId: user_id, success: false,
+        metadata: { reason: 'expired' }
+      })
+      return res.status(400).json({ error: 'Код устарел. Войди заново.', expired: true })
+    }
+
+    // Попытки
+    if (pending.attempts >= 3) {
+      await pool.query('DELETE FROM pending_logins WHERE user_id = $1', [user_id])
+      logSecurityEvent(req, {
+        event: 'login_verification_failed',
+        userId: user_id, success: false,
+        metadata: { reason: 'too_many_attempts' }
+      })
+      return res.status(400).json({ error: 'Слишком много попыток. Войди заново.', expired: true })
+    }
+
+    // Код
+    if (pending.code !== code.toString()) {
+      await pool.query(
+        'UPDATE pending_logins SET attempts = attempts + 1 WHERE user_id = $1',
+        [user_id]
+      )
+      const remaining = 2 - pending.attempts
+      logSecurityEvent(req, {
+        event: 'login_verification_failed',
+        userId: user_id, success: false,
+        metadata: { reason: 'wrong_code', attempts: pending.attempts + 1 }
+      })
+      return res.status(400).json({
+        error: `Неверный код. Осталось попыток: ${remaining}`
+      })
+    }
+
+    // Получаем юзера
+    const userResult = await pool.query(
+      'SELECT id, name, email, slug FROM users WHERE id = $1 AND deleted_at IS NULL',
+      [user_id]
+    )
+    if (userResult.rows.length === 0) {
+      await pool.query('DELETE FROM pending_logins WHERE user_id = $1', [user_id])
+      return res.status(400).json({ error: 'Аккаунт недоступен' })
+    }
+    const user = userResult.rows[0]
+
+    // Создаём trusted device запись + cookie
+    const { deviceToken, deviceLabel, city, country, ip } = await createTrustedDevice(user.id, req)
+    setTrustedCookie(res, deviceToken)
+
+    // Удаляем pending
+    await pool.query('DELETE FROM pending_logins WHERE user_id = $1', [user_id])
+
+    // Шлём уведомление о новом входе
+    await sendNewDeviceLoginNotification(user.email, user.name, deviceLabel, city, country, ip)
+
+    // Выдаём JWT
+    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '30d' })
+
+    logSecurityEvent(req, {
+      event: 'login_new_device',
+      userId: user.id, email: user.email,
+      metadata: { device: deviceLabel, city, country }
+    })
+
+    res.json({ token, user })
+  } catch (err) {
+    console.error('verify-login error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// ===== Перепослать код логина =====
+router.post('/resend-login-code', resendLoginCodeLimiter, async (req, res) => {
+  const { user_id } = req.body
+  if (!user_id) {
+    return res.status(400).json({ error: 'user_id required' })
+  }
+
+  try {
+    const userResult = await pool.query(
+      'SELECT id, email FROM users WHERE id = $1 AND deleted_at IS NULL',
+      [user_id]
+    )
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({ error: 'Войди заново' })
+    }
+    const user = userResult.rows[0]
+
+    const code = generateCode()
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000)
+    const ua = req.headers['user-agent'] || ''
+    const { city, country } = getLocationFromRequest(req)
+    const ip = getClientIp(req)
+    const deviceLabel = parseUserAgent(ua)
+
+    await pool.query(`
+      INSERT INTO pending_logins (user_id, code, code_expires_at, attempts, user_agent, ip, city, country, created_at)
+      VALUES ($1, $2, $3, 0, $4, $5, $6, $7, NOW())
+      ON CONFLICT (user_id)
+      DO UPDATE SET code = $2, code_expires_at = $3, attempts = 0,
+        user_agent = $4, ip = $5, city = $6, country = $7, created_at = NOW()
+    `, [user.id, code, expiresAt, ua, ip, city, country])
+
+    await sendLoginVerificationCode(user.email, code, deviceLabel, city)
+
+    logSecurityEvent(req, { event: 'login_code_resent', userId: user.id, email: user.email })
+
+    res.json({ success: true })
+  } catch (err) {
+    console.error('resend-login-code error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 })
