@@ -576,7 +576,7 @@ const sendEmailChangedNotification = async (oldEmail, name, newEmailMasked) => {
           ⚠️ Это был не ты?
         </p>
         <p style="margin:0;color:#92400E;font-size:13px;line-height:1.6;">
-          Срочно напиши на <a href="mailto:veneracode@gmail.com" style="color:#92400E;font-weight:600;">veneracode@gmail.com</a> — мы откатим изменение.
+          Срочно напиши на <a href="mailto:support@kogda.app" style="color:#92400E;font-weight:600;">support@kogda.app</a> — мы откатим изменение.
         </p>
       </div>
 
