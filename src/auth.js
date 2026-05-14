@@ -155,6 +155,7 @@ function parseCookie(cookieHeader, name) {
 }
 
 // Ставит cookie руками через Set-Cookie header
+// SameSite=None обязателен для cross-origin (фронт на app.kogda.app, бэк на railway.app)
 function setTrustedCookie(res, token) {
   const maxAge = TRUSTED_DEVICE_DAYS * 24 * 60 * 60 // секунды
   const isProd = process.env.NODE_ENV === 'production'
@@ -163,7 +164,8 @@ function setTrustedCookie(res, token) {
     `Max-Age=${maxAge}`,
     `Path=/`,
     `HttpOnly`,
-    `SameSite=Lax`,
+    // SameSite=None требует Secure. На локалке (NODE_ENV=development) ставим Lax.
+    isProd ? `SameSite=None` : `SameSite=Lax`,
   ]
   if (isProd) parts.push('Secure')
   res.setHeader('Set-Cookie', parts.join('; '))
@@ -1139,7 +1141,7 @@ router.delete('/devices/:id', auth, async (req, res) => {
         `Max-Age=0`,
         `Path=/`,
         `HttpOnly`,
-        `SameSite=Lax`,
+        isProd ? `SameSite=None` : `SameSite=Lax`,
       ]
       if (isProd) parts.push('Secure')
       res.setHeader('Set-Cookie', parts.join('; '))
