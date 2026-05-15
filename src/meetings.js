@@ -17,16 +17,10 @@ const auth = (req, res, next) => {
   }
 }
 
-// Известные валюты + custom код 2-5 latin букв (ISO 4217)
-const KNOWN_CURRENCIES = new Set([
-  'RUB', 'UAH', 'USD', 'EUR', 'KZT', 'BYN', 'ILS',
-  'GBP', 'GEL', 'AED', 'TRY', 'THB', 'AMD'
-])
-
+// Принимаем любой ISO 4217 код: 2-5 латинских букв
 const isValidCurrency = (v) => {
   if (!v) return false
   const s = String(v).trim().toUpperCase()
-  if (KNOWN_CURRENCIES.has(s)) return true
   return /^[A-Z]{2,5}$/.test(s)
 }
 

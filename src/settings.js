@@ -30,17 +30,10 @@ const upload = multer({
   },
 })
 
-// Список валют которые мы знаем напрямую
-const KNOWN_CURRENCIES = new Set([
-  'RUB', 'UAH', 'USD', 'EUR', 'KZT', 'BYN', 'ILS',
-  'GBP', 'GEL', 'AED', 'TRY', 'THB', 'AMD'
-])
-
-// Принимаем известные коды + произвольный код 2-5 заглавных латинских букв (ISO 4217)
+// Принимаем любой ISO 4217 код: 2-5 латинских букв в верхнем регистре
 const isValidCurrency = (v) => {
   if (!v) return false
   const s = String(v).trim().toUpperCase()
-  if (KNOWN_CURRENCIES.has(s)) return true
   return /^[A-Z]{2,5}$/.test(s)
 }
 
