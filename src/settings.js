@@ -30,11 +30,18 @@ const upload = multer({
   },
 })
 
+// Список валют которые принимаем (защита от мусора в БД)
+const ALLOWED_CURRENCIES = new Set([
+  'RUB', 'USD', 'EUR', 'ILS', 'KZT', 'GEL', 'GBP',
+  'THB', 'TRY', 'AED', 'BYN', 'AMD', 'OTHER'
+])
+
 // Получить настройки
 router.get('/', auth, async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT id, name, email, slug, bio, avatar, telegram_chat_id,
+       default_currency,
        notify_telegram, notify_email, notify_whatsapp, notify_max,
        whatsapp_phone, max_phone,
        payment_sbp, payment_tinkoff, payment_sber, payment_kaspi,
@@ -78,6 +85,28 @@ router.patch('/profile', auth, async (req, res) => {
     )
     res.json(result.rows[0])
   } catch (err) {
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Обновить общие настройки аккаунта (валюта, в будущем — timezone, language)
+router.patch('/account', auth, async (req, res) => {
+  const { default_currency } = req.body
+  try {
+    if (default_currency !== undefined) {
+      if (!ALLOWED_CURRENCIES.has(default_currency)) {
+        return res.status(400).json({ error: 'Неизвестная валюта' })
+      }
+    }
+    await pool.query(
+      `UPDATE users SET
+         default_currency = COALESCE($1, default_currency)
+       WHERE id = $2`,
+      [default_currency, req.userId]
+    )
+    res.json({ success: true })
+  } catch (err) {
+    console.error('PATCH /account error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 })

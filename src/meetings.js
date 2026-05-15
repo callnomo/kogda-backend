@@ -17,6 +17,18 @@ const auth = (req, res, next) => {
   }
 }
 
+// Валюты которые мы принимаем (защита от мусора в БД)
+const ALLOWED_CURRENCIES = new Set([
+  'RUB', 'USD', 'EUR', 'ILS', 'KZT', 'GEL', 'GBP',
+  'THB', 'TRY', 'AED', 'BYN', 'AMD', 'OTHER'
+])
+
+// Хелпер: нормализация валюты. Если пусто/невалидная — оставляем как есть (не меняем).
+const normalizeCurrency = (v) => {
+  if (!v) return null
+  return ALLOWED_CURRENCIES.has(v) ? v : null
+}
+
 // Список полей которые можно обновлять через PATCH /:id
 const PATCHABLE_FIELDS = {
   title: (v) => v,
@@ -24,6 +36,7 @@ const PATCHABLE_FIELDS = {
   duration: (v) => v,
   price: (v) => v,
   hide_price: (v) => !!v,
+  currency: (v) => normalizeCurrency(v) || 'USD',
   buffer_before: (v) => v || 0,
   buffer_after: (v) => v || 0,
   min_notice: (v) => v || 0,
@@ -96,6 +109,16 @@ router.post('/', auth, async (req, res) => {
     )
     const newSortOrder = parseInt(maxOrder.rows[0].max, 10) + 1
 
+    // Если валюта не передана — берём default_currency юзера. Если её нет — USD.
+    let finalCurrency = normalizeCurrency(currency)
+    if (!finalCurrency) {
+      const userRes = await pool.query(
+        'SELECT default_currency FROM users WHERE id = $1',
+        [req.userId]
+      )
+      finalCurrency = userRes.rows[0]?.default_currency || 'USD'
+    }
+
     const result = await pool.query(
       `INSERT INTO meeting_types 
        (user_id, title, slug, description, duration, price, hide_price, currency,
@@ -104,7 +127,7 @@ router.post('/', auth, async (req, res) => {
         price_mode, location_type, step_minutes, enabled_payments, enabled_banks) 
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
                $17, $18, $19, $20, $21) RETURNING *`,
-      [req.userId, title, slug, description, duration, price || 0, hide_price || false, currency || 'RUB',
+      [req.userId, title, slug, description, duration, price || 0, hide_price || false, finalCurrency,
        buffer_before || 0, buffer_after || 0, min_notice || 0, max_days_ahead || 60, max_per_day || 0,
        require_confirm || false, cancellation_policy || null, newSortOrder,
        price_mode || 'amount', location_type || 'video', step_minutes || 30,
