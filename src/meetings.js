@@ -4,6 +4,7 @@ const router = express.Router()
 const pool = require('./db')
 const jwt = require('jsonwebtoken')
 const { makeSlug, makeUniqueSlug } = require('./slugify')
+const { getClientGeo } = require('./geo')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -297,7 +298,7 @@ router.delete('/single-use/:token', auth, async (req, res) => {
 router.get('/public/:slug', async (req, res) => {
   try {
     const user = await pool.query(
-      'SELECT id, name, bio, avatar, slug FROM users WHERE slug = $1 AND deleted_at IS NULL',
+      'SELECT id, name, bio, avatar, slug, default_currency, timezone FROM users WHERE slug = $1 AND deleted_at IS NULL',
       [req.params.slug]
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'Not found' })
@@ -305,7 +306,11 @@ router.get('/public/:slug', async (req, res) => {
       'SELECT * FROM meeting_types WHERE user_id = $1 AND is_active = true ORDER BY sort_order ASC, created_at DESC',
       [user.rows[0].id]
     )
-    res.json({ user: user.rows[0], meetings: meetings.rows })
+    res.json({
+      user: user.rows[0],
+      meetings: meetings.rows,
+      client_geo: getClientGeo(req),
+    })
   } catch (err) {
     res.status(500).json({ error: 'Server error' })
   }
@@ -314,7 +319,7 @@ router.get('/public/:slug', async (req, res) => {
 router.get('/public/:userSlug/:serviceSlug', async (req, res) => {
   try {
     const user = await pool.query(
-      'SELECT id, name, bio, avatar, slug FROM users WHERE slug = $1 AND deleted_at IS NULL',
+      'SELECT id, name, bio, avatar, slug, default_currency, timezone FROM users WHERE slug = $1 AND deleted_at IS NULL',
       [req.params.userSlug]
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'User not found' })
@@ -325,7 +330,11 @@ router.get('/public/:userSlug/:serviceSlug', async (req, res) => {
     )
     if (meeting.rows.length === 0) return res.status(404).json({ error: 'Service not found' })
 
-    res.json({ user: user.rows[0], meeting: meeting.rows[0] })
+    res.json({
+      user: user.rows[0],
+      meeting: meeting.rows[0],
+      client_geo: getClientGeo(req),
+    })
   } catch (err) {
     console.error('[meetings public direct]', err)
     res.status(500).json({ error: 'Server error' })
@@ -348,12 +357,17 @@ router.get('/once/:token', async (req, res) => {
     if (meeting.rows.length === 0) return res.status(404).json({ error: 'Meeting not found' })
 
     const user = await pool.query(
-      'SELECT id, name, bio, avatar, slug FROM users WHERE id = $1 AND deleted_at IS NULL',
+      'SELECT id, name, bio, avatar, slug, default_currency, timezone FROM users WHERE id = $1 AND deleted_at IS NULL',
       [meeting.rows[0].user_id]
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'User not found' })
 
-    res.json({ user: user.rows[0], meeting: meeting.rows[0], token: req.params.token })
+    res.json({
+      user: user.rows[0],
+      meeting: meeting.rows[0],
+      token: req.params.token,
+      client_geo: getClientGeo(req),
+    })
   } catch (err) {
     console.error('[meetings once GET]', err)
     res.status(500).json({ error: 'Server error' })
