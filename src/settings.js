@@ -30,11 +30,19 @@ const upload = multer({
   },
 })
 
-// Список валют которые принимаем (защита от мусора в БД)
-const ALLOWED_CURRENCIES = new Set([
-  'RUB', 'USD', 'EUR', 'ILS', 'KZT', 'GEL', 'GBP',
-  'THB', 'TRY', 'AED', 'BYN', 'AMD', 'OTHER'
+// Список валют которые мы знаем напрямую
+const KNOWN_CURRENCIES = new Set([
+  'RUB', 'UAH', 'USD', 'EUR', 'KZT', 'BYN', 'ILS',
+  'GBP', 'GEL', 'AED', 'TRY', 'THB', 'AMD'
 ])
+
+// Принимаем известные коды + произвольный код 2-5 заглавных латинских букв (ISO 4217)
+const isValidCurrency = (v) => {
+  if (!v) return false
+  const s = String(v).trim().toUpperCase()
+  if (KNOWN_CURRENCIES.has(s)) return true
+  return /^[A-Z]{2,5}$/.test(s)
+}
 
 // Получить настройки
 router.get('/', auth, async (req, res) => {
@@ -93,18 +101,20 @@ router.patch('/profile', auth, async (req, res) => {
 router.patch('/account', auth, async (req, res) => {
   const { default_currency } = req.body
   try {
-    if (default_currency !== undefined) {
-      if (!ALLOWED_CURRENCIES.has(default_currency)) {
-        return res.status(400).json({ error: 'Неизвестная валюта' })
+    let normalized = null
+    if (default_currency !== undefined && default_currency !== null) {
+      if (!isValidCurrency(default_currency)) {
+        return res.status(400).json({ error: 'Неверный код валюты (2-5 латинских букв)' })
       }
+      normalized = String(default_currency).trim().toUpperCase()
     }
     await pool.query(
       `UPDATE users SET
          default_currency = COALESCE($1, default_currency)
        WHERE id = $2`,
-      [default_currency, req.userId]
+      [normalized, req.userId]
     )
-    res.json({ success: true })
+    res.json({ success: true, default_currency: normalized })
   } catch (err) {
     console.error('PATCH /account error:', err)
     res.status(500).json({ error: 'Server error' })

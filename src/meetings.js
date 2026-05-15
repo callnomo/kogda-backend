@@ -17,16 +17,23 @@ const auth = (req, res, next) => {
   }
 }
 
-// Валюты которые мы принимаем (защита от мусора в БД)
-const ALLOWED_CURRENCIES = new Set([
-  'RUB', 'USD', 'EUR', 'ILS', 'KZT', 'GEL', 'GBP',
-  'THB', 'TRY', 'AED', 'BYN', 'AMD', 'OTHER'
+// Известные валюты + custom код 2-5 latin букв (ISO 4217)
+const KNOWN_CURRENCIES = new Set([
+  'RUB', 'UAH', 'USD', 'EUR', 'KZT', 'BYN', 'ILS',
+  'GBP', 'GEL', 'AED', 'TRY', 'THB', 'AMD'
 ])
 
-// Хелпер: нормализация валюты. Если пусто/невалидная — оставляем как есть (не меняем).
+const isValidCurrency = (v) => {
+  if (!v) return false
+  const s = String(v).trim().toUpperCase()
+  if (KNOWN_CURRENCIES.has(s)) return true
+  return /^[A-Z]{2,5}$/.test(s)
+}
+
+// Хелпер: нормализация валюты. Если пусто/невалидная — null.
 const normalizeCurrency = (v) => {
-  if (!v) return null
-  return ALLOWED_CURRENCIES.has(v) ? v : null
+  if (!isValidCurrency(v)) return null
+  return String(v).trim().toUpperCase()
 }
 
 // Список полей которые можно обновлять через PATCH /:id
