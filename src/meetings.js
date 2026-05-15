@@ -298,7 +298,7 @@ router.delete('/single-use/:token', auth, async (req, res) => {
 router.get('/public/:slug', async (req, res) => {
   try {
     const user = await pool.query(
-      'SELECT id, name, bio, avatar, slug, default_currency, timezone FROM users WHERE slug = $1 AND deleted_at IS NULL',
+      'SELECT id, name, bio, avatar, slug, default_currency FROM users WHERE slug = $1 AND deleted_at IS NULL',
       [req.params.slug]
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'Not found' })
@@ -306,20 +306,23 @@ router.get('/public/:slug', async (req, res) => {
       'SELECT * FROM meeting_types WHERE user_id = $1 AND is_active = true ORDER BY sort_order ASC, created_at DESC',
       [user.rows[0].id]
     )
+    let geo = null
+    try { geo = getClientGeo(req) } catch (e) { console.error('[geo error]', e) }
     res.json({
       user: user.rows[0],
       meetings: meetings.rows,
-      client_geo: getClientGeo(req),
+      client_geo: geo,
     })
   } catch (err) {
-    res.status(500).json({ error: 'Server error' })
+    console.error('[meetings public]', err)
+    res.status(500).json({ error: 'Server error', details: err.message })
   }
 })
 
 router.get('/public/:userSlug/:serviceSlug', async (req, res) => {
   try {
     const user = await pool.query(
-      'SELECT id, name, bio, avatar, slug, default_currency, timezone FROM users WHERE slug = $1 AND deleted_at IS NULL',
+      'SELECT id, name, bio, avatar, slug, default_currency FROM users WHERE slug = $1 AND deleted_at IS NULL',
       [req.params.userSlug]
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'User not found' })
@@ -330,14 +333,17 @@ router.get('/public/:userSlug/:serviceSlug', async (req, res) => {
     )
     if (meeting.rows.length === 0) return res.status(404).json({ error: 'Service not found' })
 
+    let geo = null
+    try { geo = getClientGeo(req) } catch (e) { console.error('[geo error]', e) }
+
     res.json({
       user: user.rows[0],
       meeting: meeting.rows[0],
-      client_geo: getClientGeo(req),
+      client_geo: geo,
     })
   } catch (err) {
     console.error('[meetings public direct]', err)
-    res.status(500).json({ error: 'Server error' })
+    res.status(500).json({ error: 'Server error', details: err.message })
   }
 })
 
@@ -357,20 +363,23 @@ router.get('/once/:token', async (req, res) => {
     if (meeting.rows.length === 0) return res.status(404).json({ error: 'Meeting not found' })
 
     const user = await pool.query(
-      'SELECT id, name, bio, avatar, slug, default_currency, timezone FROM users WHERE id = $1 AND deleted_at IS NULL',
+      'SELECT id, name, bio, avatar, slug, default_currency FROM users WHERE id = $1 AND deleted_at IS NULL',
       [meeting.rows[0].user_id]
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'User not found' })
+
+    let geo = null
+    try { geo = getClientGeo(req) } catch (e) { console.error('[geo error]', e) }
 
     res.json({
       user: user.rows[0],
       meeting: meeting.rows[0],
       token: req.params.token,
-      client_geo: getClientGeo(req),
+      client_geo: geo,
     })
   } catch (err) {
     console.error('[meetings once GET]', err)
-    res.status(500).json({ error: 'Server error' })
+    res.status(500).json({ error: 'Server error', details: err.message })
   }
 })
 
