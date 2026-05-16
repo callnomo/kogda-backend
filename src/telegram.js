@@ -274,11 +274,54 @@ const notifyRescheduleRequest = async (clientName, meetingTitle, newDate, newTim
   })
 }
 
+// НОВОЕ: коучу — висит pending-запрос, ждёт ответа.
+// Шлётся по триггерам из cron (защита от дублей через pending_reminder_sent_at).
+// Inline-кнопки confirm/reject переиспользуют существующие обработчики callback_query.
+const notifyPendingReminder = async (clientName, clientEmail, meetingTitle, date, time, bookingId, userId) => {
+  const chatId = await getUserChatId(userId)
+  await sendToUser(chatId, `
+⏳ <b>Запрос ждёт ответа</b>
+
+👤 <b>Клиент:</b> ${clientName}
+📧 <b>Email:</b> ${clientEmail}
+📅 <b>Встреча:</b> ${meetingTitle}
+🗓 <b>Дата:</b> ${date}
+⏰ <b>Время:</b> ${time}
+
+Если не ответить — запрос отменится автоматически после времени встречи.
+  `, {
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✅ Подтвердить', callback_data: `confirm_booking_${bookingId}` },
+        { text: '❌ Отклонить', callback_data: `reject_booking_${bookingId}` }
+      ]]
+    }
+  })
+}
+
+// НОВОЕ: коучу — pending-запрос истёк и отменён автоматически.
+// Шлётся из cron когда время встречи прошло, а коуч так и не ответил.
+const notifyBookingExpired = async (clientName, meetingTitle, date, time, userId) => {
+  const chatId = await getUserChatId(userId)
+  await sendToUser(chatId, `
+⌛ <b>Запрос истёк и отменён</b>
+
+👤 <b>Клиент:</b> ${clientName}
+📅 <b>Встреча:</b> ${meetingTitle}
+🗓 <b>Дата:</b> ${date}
+⏰ <b>Время:</b> ${time}
+
+Запрос не был подтверждён вовремя, время встречи прошло. Клиент получил уведомление по email.
+  `)
+}
+
 module.exports = {
   notifyNewBooking,
   notifyBookingCancelled,
   notifyRescheduleRequest,
   notifyReminder24h,
   notifyReminder1h,
-  notifyDailySummary
+  notifyDailySummary,
+  notifyPendingReminder,
+  notifyBookingExpired
 }
