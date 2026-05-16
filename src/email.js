@@ -481,7 +481,7 @@ const sendAccountDeletionEmail = async (email, name, scheduledDeleteDate, cancel
   }
 }
 
-// ===== НОВОЕ: код подтверждения смены email (на НОВЫЙ адрес) =====
+// ===== Код подтверждения смены email (на НОВЫЙ адрес) =====
 const sendEmailChangeCode = async (newEmail, code) => {
   try {
     await resend.emails.send({
@@ -535,7 +535,7 @@ const sendEmailChangeCode = async (newEmail, code) => {
   }
 }
 
-// ===== НОВОЕ: уведомление о смене email (на СТАРЫЙ адрес для безопасности) =====
+// ===== Уведомление о смене email (на СТАРЫЙ адрес для безопасности) =====
 const sendEmailChangedNotification = async (oldEmail, name, newEmailMasked) => {
   try {
     await resend.emails.send({
@@ -595,7 +595,7 @@ const sendEmailChangedNotification = async (oldEmail, name, newEmailMasked) => {
   }
 }
 
-// ===== НОВОЕ: код подтверждения логина с нового устройства =====
+// ===== Код подтверждения логина с нового устройства =====
 const sendLoginVerificationCode = async (email, code, deviceLabel, city) => {
   const locationStr = city ? ` из ${city}` : ''
   const deviceStr = deviceLabel || 'нового устройства'
@@ -660,11 +660,10 @@ const sendLoginVerificationCode = async (email, code, deviceLabel, city) => {
   }
 }
 
-// ===== НОВОЕ: уведомление об успешном входе с нового устройства =====
+// ===== Уведомление об успешном входе с нового устройства =====
 const sendNewDeviceLoginNotification = async (email, name, deviceLabel, city, country, ip) => {
   const locationStr = city ? `${city}${country ? ', ' + country : ''}` : (ip || 'неизвестное место')
   const now = new Date()
-  // Показываем время в UTC явно, чтобы юзер понимал в каком оно поясе
   const timeStr = now.toLocaleString('ru-RU', {
     day: 'numeric', month: 'long',
     hour: '2-digit', minute: '2-digit',
@@ -744,8 +743,6 @@ const sendNewDeviceLoginNotification = async (email, name, deviceLabel, city, co
 }
 
 // ===== НОВОЕ: запрос на запись истёк — КЛИЕНТУ (на ВЫ) =====
-// Шлётся когда pending-запрос не подтверждён, а время встречи прошло.
-// cron переводит запись в cancelled и шлёт это письмо.
 const sendBookingExpiredClient = async (clientEmail, clientName, meetingTitle, date, time, expertName) => {
   try {
     await resend.emails.send({
@@ -807,8 +804,74 @@ const sendBookingExpiredClient = async (clientEmail, clientName, meetingTitle, d
   }
 }
 
+// ===== НОВОЕ: запрос истёк и отменён — КОУЧУ (на ты) =====
+const sendBookingExpiredCoach = async (coachEmail, coachName, clientName, clientEmail, meetingTitle, date, time) => {
+  try {
+    await resend.emails.send({
+      from: 'kogDA <noreply@kogda.app>',
+      to: coachEmail,
+      subject: `Запрос от ${clientName} истёк и отменён`,
+      html: `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;padding:0 20px;">
+
+    ${LOGO_HTML}
+
+    <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
+      ${iconCircle('⌛')}
+
+      <h1 style="text-align:center;font-size:22px;font-weight:800;color:#111;margin:0 0 8px;">
+        Запрос истёк и отменён
+      </h1>
+      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 28px;line-height:1.5;">
+        Привет${coachName ? `, ${coachName}` : ''}! Запрос не был подтверждён вовремя, время встречи прошло. Мы отменили его автоматически, клиент получил уведомление.
+      </p>
+
+      <div style="background:#F7F6F1;border-radius:16px;padding:24px;margin-bottom:24px;">
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Клиент</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${clientName}</div>
+          <div style="font-size:13px;color:#888;">${clientEmail}</div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Встреча</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${meetingTitle}</div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Было запрошено на</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${formatDate(date)} в ${time}</div>
+        </div>
+      </div>
+
+      <div style="background:#F7F6F1;border-radius:12px;padding:16px;">
+        <p style="margin:0;color:#888;font-size:13px;line-height:1.6;">
+          На будущее: подтверждай или отклоняй запросы вовремя, чтобы клиенты не оставались без ответа.
+        </p>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:24px;">
+      <p style="color:#aaa;font-size:12px;">Письмо отправлено через kogDA</p>
+    </div>
+
+  </div>
+</body>
+</html>
+      `
+    })
+    console.log('Booking expired (coach) email отправлен:', coachEmail)
+  } catch (err) {
+    console.error('Booking expired (coach) email error:', err.message)
+  }
+}
+
 // ===== НОВОЕ: висящий запрос ждёт ответа — КОУЧУ (на ты) =====
-// Шлётся по триггерам пока pending не подтверждён (защита от дублей в cron через pending_reminder_sent_at).
 const sendPendingReminderCoach = async (coachEmail, coachName, clientName, clientEmail, meetingTitle, date, time) => {
   const confirmUrl = 'https://app.kogda.app/bookings'
   try {
@@ -888,5 +951,6 @@ module.exports = {
   sendLoginVerificationCode,
   sendNewDeviceLoginNotification,
   sendBookingExpiredClient,
+  sendBookingExpiredCoach,
   sendPendingReminderCoach,
 }
