@@ -4,7 +4,7 @@ const multer = require('multer')
 const pool = require('./db')
 const jwt = require('jsonwebtoken')
 const crypto = require('crypto')
-const { uploadAvatar, deleteAvatar } = require('./r2')
+const { uploadAvatar, deleteAvatar, uploadCover, deleteCover } = require('./r2')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -41,7 +41,7 @@ const isValidCurrency = (v) => {
 router.get('/', auth, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, name, email, slug, bio, avatar, telegram_chat_id,
+      `SELECT id, name, email, slug, bio, avatar, cover, socials, telegram_chat_id,
        default_currency,
        notify_telegram, notify_email, notify_whatsapp, notify_max,
        whatsapp_phone, max_phone,
@@ -71,7 +71,7 @@ router.post('/telegram/token', auth, async (req, res) => {
 
 // Обновить профиль
 router.patch('/profile', auth, async (req, res) => {
-  const { name, bio, slug } = req.body
+  const { name, bio, slug, socials } = req.body
   try {
     if (slug) {
       const exists = await pool.query(
@@ -80,9 +80,22 @@ router.patch('/profile', auth, async (req, res) => {
       )
       if (exists.rows.length > 0) return res.status(400).json({ error: 'Этот никнейм уже занят' })
     }
+    let socialsJson = null
+    if (socials !== undefined) {
+      if (!Array.isArray(socials)) {
+        return res.status(400).json({ error: 'socials должен быть массивом' })
+      }
+      socialsJson = JSON.stringify(socials)
+    }
     const result = await pool.query(
-      'UPDATE users SET name = COALESCE($1, name), bio = COALESCE($2, bio), slug = COALESCE($3, slug) WHERE id = $4 RETURNING id, name, email, slug, bio',
-      [name, bio, slug, req.userId]
+      `UPDATE users SET
+         name = COALESCE($1, name),
+         bio = COALESCE($2, bio),
+         slug = COALESCE($3, slug),
+         socials = COALESCE($4::jsonb, socials)
+       WHERE id = $5
+       RETURNING id, name, email, slug, bio, socials`,
+      [name, bio, slug, socialsJson, req.userId]
     )
     res.json(result.rows[0])
   } catch (err) {
@@ -152,6 +165,44 @@ router.delete('/avatar', auth, async (req, res) => {
     res.json({ success: true })
   } catch (err) {
     console.error('Avatar delete error:', err)
+    res.status(500).json({ error: 'Ошибка удаления' })
+  }
+})
+
+// Загрузить обложку
+router.post('/cover', auth, upload.single('cover'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Файл не получен' })
+
+    const oldRes = await pool.query('SELECT cover FROM users WHERE id = $1', [req.userId])
+    const oldCover = oldRes.rows[0]?.cover
+
+    const newUrl = await uploadCover(req.file.buffer, req.file.mimetype, req.userId)
+
+    await pool.query('UPDATE users SET cover = $1 WHERE id = $2', [newUrl, req.userId])
+
+    if (oldCover) await deleteCover(oldCover)
+
+    res.json({ cover: newUrl })
+  } catch (err) {
+    console.error('Cover upload error:', err)
+    res.status(500).json({ error: err.message || 'Ошибка загрузки' })
+  }
+})
+
+// Удалить обложку
+router.delete('/cover', auth, async (req, res) => {
+  try {
+    const oldRes = await pool.query('SELECT cover FROM users WHERE id = $1', [req.userId])
+    const oldCover = oldRes.rows[0]?.cover
+
+    await pool.query('UPDATE users SET cover = NULL WHERE id = $1', [req.userId])
+
+    if (oldCover) await deleteCover(oldCover)
+
+    res.json({ success: true })
+  } catch (err) {
+    console.error('Cover delete error:', err)
     res.status(500).json({ error: 'Ошибка удаления' })
   }
 })
