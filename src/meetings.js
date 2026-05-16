@@ -198,7 +198,11 @@ router.patch('/:id/visibility', auth, async (req, res) => {
   }
 })
 
-// DELETE /:id — защита от удаления услуги с записями
+// DELETE /:id — защита от удаления услуги с АКТИВНЫМИ БУДУЩИМИ записями.
+// Прошедшие / отменённые записи НЕ блокируют удаление: они уходят каскадом
+// (FK bookings_meeting_type_id_fkey = CASCADE). Решение 16.05.2026:
+// у живого специалиста записи не удаляются по таймеру, но при осознанном
+// удалении услуги коучем — удаляются вместе с ней.
 router.delete('/:id', auth, async (req, res) => {
   try {
     const meeting = await pool.query(
@@ -209,8 +213,14 @@ router.delete('/:id', auth, async (req, res) => {
       return res.status(404).json({ error: 'Not found' })
     }
 
+    // Блокируем только будущие записи в статусе confirmed/pending —
+    // это живые встречи, к которым придёт клиент. Прошедшие и отменённые
+    // не считаем.
     const bookingsCheck = await pool.query(
-      'SELECT COUNT(*) AS count FROM bookings WHERE meeting_type_id = $1',
+      `SELECT COUNT(*) AS count FROM bookings 
+       WHERE meeting_type_id = $1 
+         AND start_time > NOW() 
+         AND status IN ('confirmed', 'pending')`,
       [req.params.id]
     )
     const bookingsCount = parseInt(bookingsCheck.rows[0].count, 10)
