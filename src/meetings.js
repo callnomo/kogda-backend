@@ -304,11 +304,12 @@ router.delete('/single-use/:token', auth, async (req, res) => {
 
 // ============ ПУБЛИЧНЫЕ ENDPOINT'Ы ============
 // Фильтр deleted_at IS NULL — удалённый коуч недоступен для бронирования
+// cover + socials добавлены 16.05.2026 — для оформления публичной страницы
 
 router.get('/public/:slug', async (req, res) => {
   try {
     const user = await pool.query(
-      'SELECT id, name, bio, avatar, slug, default_currency FROM users WHERE slug = $1 AND deleted_at IS NULL',
+      'SELECT id, name, bio, avatar, cover, socials, slug, default_currency FROM users WHERE slug = $1 AND deleted_at IS NULL',
       [req.params.slug]
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'Not found' })
@@ -332,7 +333,7 @@ router.get('/public/:slug', async (req, res) => {
 router.get('/public/:userSlug/:serviceSlug', async (req, res) => {
   try {
     const user = await pool.query(
-      'SELECT id, name, bio, avatar, slug, default_currency FROM users WHERE slug = $1 AND deleted_at IS NULL',
+      'SELECT id, name, bio, avatar, cover, socials, slug, default_currency FROM users WHERE slug = $1 AND deleted_at IS NULL',
       [req.params.userSlug]
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'User not found' })
@@ -373,7 +374,7 @@ router.get('/once/:token', async (req, res) => {
     if (meeting.rows.length === 0) return res.status(404).json({ error: 'Meeting not found' })
 
     const user = await pool.query(
-      'SELECT id, name, bio, avatar, slug, default_currency FROM users WHERE id = $1 AND deleted_at IS NULL',
+      'SELECT id, name, bio, avatar, cover, socials, slug, default_currency FROM users WHERE id = $1 AND deleted_at IS NULL',
       [meeting.rows[0].user_id]
     )
     if (user.rows.length === 0) return res.status(404).json({ error: 'User not found' })
