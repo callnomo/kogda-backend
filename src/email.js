@@ -743,6 +743,137 @@ const sendNewDeviceLoginNotification = async (email, name, deviceLabel, city, co
   }
 }
 
+// ===== НОВОЕ: запрос на запись истёк — КЛИЕНТУ (на ВЫ) =====
+// Шлётся когда pending-запрос не подтверждён, а время встречи прошло.
+// cron переводит запись в cancelled и шлёт это письмо.
+const sendBookingExpiredClient = async (clientEmail, clientName, meetingTitle, date, time, expertName) => {
+  try {
+    await resend.emails.send({
+      from: 'kogDA <noreply@kogda.app>',
+      to: clientEmail,
+      subject: `Запрос на запись истёк — ${meetingTitle}`,
+      html: `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;padding:0 20px;">
+
+    ${LOGO_HTML}
+
+    <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
+      ${iconCircle('⌛')}
+
+      <h1 style="text-align:center;font-size:24px;font-weight:800;color:#111;margin:0 0 8px;">
+        Запрос на запись истёк
+      </h1>
+      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 32px;line-height:1.5;">
+        Здравствуйте, ${clientName}! К сожалению, специалист${expertName ? ` ${expertName}` : ''} не подтвердил Ваш запрос вовремя, и время встречи прошло.
+      </p>
+
+      <div style="background:#F7F6F1;border-radius:16px;padding:24px;margin-bottom:24px;">
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Встреча</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${meetingTitle}</div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Было запрошено на</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${formatDate(date)} в ${time}</div>
+        </div>
+      </div>
+
+      <div style="background:#F7F6F1;border-radius:12px;padding:16px;">
+        <p style="margin:0;color:#888;font-size:13px;line-height:1.6;">
+          Если встреча всё ещё нужна — попробуйте записаться снова или свяжитесь со специалистом напрямую.
+        </p>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:24px;">
+      <p style="color:#aaa;font-size:12px;">Письмо отправлено через kogDA</p>
+    </div>
+
+  </div>
+</body>
+</html>
+      `
+    })
+    console.log('Booking expired (client) email отправлен:', clientEmail)
+  } catch (err) {
+    console.error('Booking expired (client) email error:', err.message)
+  }
+}
+
+// ===== НОВОЕ: висящий запрос ждёт ответа — КОУЧУ (на ты) =====
+// Шлётся по триггерам пока pending не подтверждён (защита от дублей в cron через pending_reminder_sent_at).
+const sendPendingReminderCoach = async (coachEmail, coachName, clientName, clientEmail, meetingTitle, date, time) => {
+  const confirmUrl = 'https://app.kogda.app/bookings'
+  try {
+    await resend.emails.send({
+      from: 'kogDA <noreply@kogda.app>',
+      to: coachEmail,
+      subject: `Запрос от ${clientName} ждёт ответа`,
+      html: `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:#F7F6F1;font-family:'Helvetica Neue',Arial,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;padding:0 20px;">
+
+    ${LOGO_HTML}
+
+    <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
+      ${iconCircle('⏳')}
+
+      <h1 style="text-align:center;font-size:22px;font-weight:800;color:#111;margin:0 0 8px;">
+        Запрос ждёт ответа
+      </h1>
+      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 28px;line-height:1.5;">
+        Привет${coachName ? `, ${coachName}` : ''}! Клиент ждёт подтверждения. Если не ответить — запрос отменится автоматически после времени встречи.
+      </p>
+
+      <div style="background:#F7F6F1;border-radius:16px;padding:24px;margin-bottom:24px;">
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Клиент</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${clientName}</div>
+          <div style="font-size:13px;color:#888;">${clientEmail}</div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Встреча</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${meetingTitle}</div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Дата и время</div>
+          <div style="font-size:16px;font-weight:700;color:#111;">${formatDate(date)} в ${time}</div>
+        </div>
+      </div>
+
+      <a href="${confirmUrl}" style="display:block;background:#111;color:#fff;text-align:center;padding:16px;border-radius:12px;font-size:16px;font-weight:800;text-decoration:none;">
+        Подтвердить или отклонить
+      </a>
+    </div>
+
+    <div style="text-align:center;margin-top:24px;">
+      <p style="color:#aaa;font-size:12px;">Письмо отправлено через kogDA</p>
+    </div>
+
+  </div>
+</body>
+</html>
+      `
+    })
+    console.log('Pending reminder (coach) email отправлен:', coachEmail)
+  } catch (err) {
+    console.error('Pending reminder (coach) email error:', err.message)
+  }
+}
+
 module.exports = {
   sendBookingConfirmation,
   sendReminder,
@@ -756,4 +887,6 @@ module.exports = {
   sendEmailChangedNotification,
   sendLoginVerificationCode,
   sendNewDeviceLoginNotification,
+  sendBookingExpiredClient,
+  sendPendingReminderCoach,
 }
