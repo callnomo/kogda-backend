@@ -55,7 +55,7 @@ const sendBookingConfirmation = async (clientEmail, clientName, meetingTitle, da
         Встреча подтверждена!
       </h1>
       <p style="text-align:center;color:#888;font-size:15px;margin:0 0 32px;">
-        Привет, ${clientName}! Ты записан к ${expertName}.
+        Здравствуйте, ${clientName}! Вы записаны к ${expertName}.
       </p>
 
       <div style="background:#F7F6F1;border-radius:16px;padding:24px;margin-bottom:24px;">
@@ -82,7 +82,7 @@ const sendBookingConfirmation = async (clientEmail, clientName, meetingTitle, da
       </a>
 
       <p style="text-align:center;color:#888;font-size:13px;margin:0;">
-        Сохрани это письмо — ссылка на встречу и управление записью всегда здесь.
+        Сохраните это письмо — ссылка на встречу и управление записью всегда здесь.
       </p>
     </div>
 
@@ -117,7 +117,7 @@ const sendReminder = async (clientEmail, clientName, meetingTitle, date, time, v
     <div style="background:#fff;border-radius:24px;padding:40px;border:1px solid #E8E7E0;">
       ${iconCircle('⏰')}
       <h1 style="text-align:center;font-size:22px;font-weight:800;color:#111;margin:0 0 8px;">Встреча завтра!</h1>
-      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 28px;">Привет, ${clientName}! Напоминаем о твоей встрече.</p>
+      <p style="text-align:center;color:#888;font-size:15px;margin:0 0 28px;">Здравствуйте, ${clientName}! Напоминаем о Вашей встрече.</p>
       <div style="background:#F7F6F1;border-radius:16px;padding:20px;margin-bottom:24px;">
         <p style="margin:0 0 8px;font-size:15px;font-weight:700;">${meetingTitle}</p>
         <p style="margin:0;color:#888;font-size:14px;">${formatDate(date)} в ${time}</p>
