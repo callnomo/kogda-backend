@@ -41,7 +41,7 @@ const isValidCurrency = (v) => {
 router.get('/', auth, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, name, email, slug, bio, avatar, cover, socials, telegram_chat_id,
+      `SELECT id, name, email, slug, bio, headline, avatar, cover, socials, telegram_chat_id,
        default_currency,
        notify_telegram, notify_email, notify_whatsapp, notify_max,
        whatsapp_phone, max_phone,
@@ -71,7 +71,7 @@ router.post('/telegram/token', auth, async (req, res) => {
 
 // Обновить профиль
 router.patch('/profile', auth, async (req, res) => {
-  const { name, bio, slug, socials } = req.body
+  const { name, bio, slug, headline, socials } = req.body
   try {
     if (slug) {
       const exists = await pool.query(
@@ -92,10 +92,11 @@ router.patch('/profile', auth, async (req, res) => {
          name = COALESCE($1, name),
          bio = COALESCE($2, bio),
          slug = COALESCE($3, slug),
-         socials = COALESCE($4::jsonb, socials)
-       WHERE id = $5
-       RETURNING id, name, email, slug, bio, socials`,
-      [name, bio, slug, socialsJson, req.userId]
+         headline = COALESCE($4, headline),
+         socials = COALESCE($5::jsonb, socials)
+       WHERE id = $6
+       RETURNING id, name, email, slug, bio, headline, socials`,
+      [name, bio, slug, headline, socialsJson, req.userId]
     )
     res.json(result.rows[0])
   } catch (err) {
