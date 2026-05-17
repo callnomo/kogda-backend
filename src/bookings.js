@@ -4,7 +4,7 @@ const pool = require('./db')
 const jwt = require('jsonwebtoken')
 const crypto = require('crypto')
 const { notifyNewBooking, notifyBookingCancelled, notifyRescheduleRequest } = require('./telegram')
-const { sendBookingConfirmation, sendCoachNotification, sendBookingCancelledByCoachEmail } = require('./email')
+const { sendBookingConfirmation, sendCoachNotification, sendBookingCancelledByCoachEmail, sendBookingRescheduleRequestByCoachEmail } = require('./email')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -251,7 +251,7 @@ router.get('/', auth, async (req, res) => {
 router.patch('/:id/cancel', auth, async (req, res) => {
   try {
     const bookingResult = await pool.query(
-      `SELECT b.*, mt.title as meeting_title, mt.user_id, u.name as expert_name
+      `SELECT b.*, mt.title as meeting_title, mt.user_id, u.name as expert_name, u.slug as expert_slug
        FROM bookings b
        JOIN meeting_types mt ON b.meeting_type_id = mt.id
        JOIN users u ON mt.user_id = u.id
@@ -288,6 +288,55 @@ router.patch('/:id/cancel', auth, async (req, res) => {
     res.json({ success: true })
   } catch (err) {
     console.error('[bookings cancel]', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Коуч просит клиента перенести встречу.
+// Бронь → 'cancelled' (слот освобождается), клиенту уходит мягкое письмо
+// с приглашением выбрать новое время на публичной странице коуча.
+// Клиент перезаписывается заново через обычный флоу. Решение 17.05.2026.
+router.patch('/:id/cancel-reschedule', auth, async (req, res) => {
+  try {
+    const bookingResult = await pool.query(
+      `SELECT b.*, mt.title as meeting_title, mt.user_id, u.name as expert_name, u.slug as expert_slug
+       FROM bookings b
+       JOIN meeting_types mt ON b.meeting_type_id = mt.id
+       JOIN users u ON mt.user_id = u.id
+       WHERE b.id = $1`,
+      [req.params.id]
+    )
+    if (bookingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Not found' })
+    }
+
+    const booking = bookingResult.rows[0]
+
+    if (booking.user_id !== req.userId) {
+      return res.status(403).json({ error: 'Forbidden' })
+    }
+
+    const startDate = new Date(booking.start_time)
+    const dateRu = startDate.toLocaleDateString('ru-RU')
+    const timeRu = startDate.toTimeString().slice(0, 5)
+    const dateIso = `${startDate.getFullYear()}-${String(startDate.getMonth()+1).padStart(2,'0')}-${String(startDate.getDate()).padStart(2,'0')}`
+
+    notifyBookingCancelled(booking.client_name, booking.meeting_title, dateRu, timeRu, booking.user_id)
+
+    sendBookingRescheduleRequestByCoachEmail(
+      booking.client_email,
+      booking.client_name,
+      booking.meeting_title,
+      dateIso,
+      timeRu,
+      booking.expert_name,
+      booking.expert_slug
+    )
+
+    await pool.query('UPDATE bookings SET status = $1 WHERE id = $2', ['cancelled', req.params.id])
+    res.json({ success: true })
+  } catch (err) {
+    console.error('[bookings cancel-reschedule]', err)
     res.status(500).json({ error: 'Server error' })
   }
 })
