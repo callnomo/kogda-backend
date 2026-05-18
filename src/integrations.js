@@ -11,9 +11,11 @@ const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI
 // Куда возвращаем коуча в кабинет после подключения/ошибки
 const FRONTEND_URL = 'https://app.kogda.app'
 
-// Scope: видеть и редактировать события календаря.
-// Достаточно для проверки занятости (FreeBusy) и создания/удаления наших броней.
-const GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar.events']
+// Scope: ТОЛЬКО доступность (свободен/занят) через FreeBusy.
+// Google технически НЕ отдаёт нам названия/описания событий при этом scope —
+// privacy-гарантия на стороне Google, не на нашей дисциплине.
+// Самый узкий scope для нашей задачи (см. таблицу Calendar API scopes).
+const GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar.freebusy']
 
 // Создаём OAuth-клиента Google
 function makeOAuthClient() {
@@ -394,106 +396,6 @@ router.get('/_debug/freebusy', auth, async (req, res) => {
   }
 })
 
-// =========================================================
-// ВРЕМЕННЫЙ расширенный диагностический endpoint.
-// Показывает: в какой Google-аккаунт реально лезет токен,
-// какие у него календари, и СЫРОЙ список событий (events API,
-// не FreeBusy) за +/- сутки от даты.
-// Нужен чтобы понять, почему FreeBusy пуст.
-// УДАЛИМ вместе с _debug/freebusy перед встройкой в booking.
-// На запись клиентов не влияет — только читает.
-// Пример: GET /integrations/_debug/raw?date=2026-05-19
-// =========================================================
-router.get('/_debug/raw', auth, async (req, res) => {
-  try {
-    const date = req.query.date
-    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return res.status(400).json({ error: 'Передай ?date=YYYY-MM-DD' })
-    }
-
-    const accessToken = await getFreshAccessToken(req.userId)
-    if (!accessToken) {
-      return res.json({
-        userId: req.userId,
-        token: 'НЕТ ТОКЕНА — Google не подключён у этого userId или refresh не сработал',
-      })
-    }
-
-    // 1. Список календарей аккаунта, в который смотрит токен.
-    //    Покажет email/id каждого календаря — увидим, ТОТ ли это аккаунт.
-    let calendars = null
-    let calendarsError = null
-    try {
-      const r = await fetch(
-        'https://www.googleapis.com/calendar/v3/users/me/calendarList',
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      )
-      if (r.ok) {
-        const d = await r.json()
-        calendars = (d.items || []).map(c => ({
-          id: c.id,
-          summary: c.summary,
-          primary: c.primary || false,
-          accessRole: c.accessRole,
-        }))
-      } else {
-        calendarsError = `Google ответил ${r.status}`
-      }
-    } catch (e) {
-      calendarsError = e.message
-    }
-
-    // 2. Сырые события (events API) за +/- сутки от даты, по primary.
-    const dayBefore = new Date(`${date}T00:00:00.000Z`)
-    dayBefore.setUTCDate(dayBefore.getUTCDate() - 1)
-    const dayAfter = new Date(`${date}T00:00:00.000Z`)
-    dayAfter.setUTCDate(dayAfter.getUTCDate() + 2)
-    const tMin = dayBefore.toISOString()
-    const tMax = dayAfter.toISOString()
-
-    let events = null
-    let eventsError = null
-    try {
-      const url =
-        'https://www.googleapis.com/calendar/v3/calendars/primary/events' +
-        `?timeMin=${encodeURIComponent(tMin)}` +
-        `&timeMax=${encodeURIComponent(tMax)}` +
-        '&singleEvents=true&orderBy=startTime'
-      const r = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      })
-      if (r.ok) {
-        const d = await r.json()
-        events = (d.items || []).map(ev => ({
-          summary: ev.summary || '(без названия)',
-          start: ev.start, // {dateTime|date, timeZone}
-          end: ev.end,
-          status: ev.status,
-          transparency: ev.transparency || 'opaque', // opaque=Занят, transparent=Свободен
-          eventType: ev.eventType,
-        }))
-      } else {
-        eventsError = `Google ответил ${r.status}`
-      }
-    } catch (e) {
-      eventsError = e.message
-    }
-
-    res.json({
-      userId: req.userId,
-      date,
-      events_window: { timeMin: tMin, timeMax: tMax },
-      calendars,
-      calendarsError,
-      events_count: events ? events.length : null,
-      events,
-      eventsError,
-    })
-  } catch (err) {
-    console.error('GET /integrations/_debug/raw error:', err)
-    res.status(500).json({ error: 'Server error' })
-  }
-})
 
 module.exports = router
 module.exports.getFreshAccessToken = getFreshAccessToken
