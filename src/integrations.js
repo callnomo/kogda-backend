@@ -201,4 +201,199 @@ router.post('/google/disconnect', auth, async (req, res) => {
   }
 })
 
+// =========================================================
+// ===== ШАГ 2: УТИЛИТЫ ДЛЯ ЧТЕНИЯ ЗАНЯТОСТИ (FreeBusy) =====
+// =========================================================
+// Эти функции пока никто не вызывает в booking-флоу.
+// Их подключит schedule.js на следующем шаге.
+// Любая ошибка здесь НЕ должна ломать запись клиентов —
+// поэтому getGoogleBusy при любом сбое возвращает [].
+// =========================================================
+
+// --- getFreshAccessToken(userId) ---
+// Возвращает рабочий access_token коуча для Google API.
+// Логика:
+//  1. Берём строку из calendar_connections (provider='google').
+//  2. Если Google не подключён — возвращаем null (это не ошибка).
+//  3. Если access_token ещё живой (есть запас > 2 минут) — отдаём его как есть.
+//  4. Если протух или скоро протухнет — обновляем через refresh_token,
+//     записываем свежий access_token + expiry обратно в БД, отдаём новый.
+//  5. Если обновить не удалось (refresh отозван и т.п.) — возвращаем null.
+//     В этом случае синхра просто не применится, booking продолжит работать.
+async function getFreshAccessToken(userId) {
+  try {
+    const result = await pool.query(
+      `SELECT access_token, refresh_token, token_expiry
+         FROM calendar_connections
+        WHERE user_id = $1 AND provider = 'google'`,
+      [userId]
+    )
+
+    if (result.rows.length === 0) {
+      // У этого коуча Google не подключён — нечего синхронизировать
+      return null
+    }
+
+    const row = result.rows[0]
+    const accessToken = row.access_token
+    const refreshToken = row.refresh_token
+    const tokenExpiry = row.token_expiry ? new Date(row.token_expiry) : null
+
+    // Запас 2 минуты: если токен протухнет в ближайшие 2 мин — считаем протухшим
+    const SAFETY_MS = 2 * 60 * 1000
+    const now = Date.now()
+    const stillValid =
+      accessToken &&
+      tokenExpiry &&
+      tokenExpiry.getTime() - now > SAFETY_MS
+
+    if (stillValid) {
+      return accessToken
+    }
+
+    // Нужно обновить. Без refresh_token обновить нельзя.
+    if (!refreshToken) {
+      console.error(`getFreshAccessToken: нет refresh_token у user ${userId}`)
+      return null
+    }
+
+    const oauth2 = makeOAuthClient()
+    oauth2.setCredentials({ refresh_token: refreshToken })
+
+    // google-auth-library сам сходит к Google и вернёт свежий access_token
+    const { credentials } = await oauth2.refreshAccessToken()
+    const newAccessToken = credentials.access_token || null
+    const newExpiry = credentials.expiry_date
+      ? new Date(credentials.expiry_date)
+      : null
+
+    if (!newAccessToken) {
+      console.error(`getFreshAccessToken: refresh не вернул access_token, user ${userId}`)
+      return null
+    }
+
+    // Сохраняем свежий токен обратно (refresh_token обычно не меняется,
+    // но если Google прислал новый — обновим и его)
+    await pool.query(
+      `UPDATE calendar_connections
+          SET access_token = $1,
+              token_expiry = $2,
+              refresh_token = COALESCE($3, refresh_token),
+              updated_at = NOW()
+        WHERE user_id = $4 AND provider = 'google'`,
+      [newAccessToken, newExpiry, credentials.refresh_token || null, userId]
+    )
+
+    return newAccessToken
+  } catch (err) {
+    // Любой сбой (refresh отозван, сеть, БД) — не валим booking, просто null
+    console.error(`getFreshAccessToken error (user ${userId}):`, err.message)
+    return null
+  }
+}
+
+// --- getGoogleBusy(userId, timeMinISO, timeMaxISO) ---
+// Спрашивает у Google FreeBusy API: когда коуч занят в окне [timeMin, timeMax].
+// Возвращает массив занятых интервалов: [{ start: ISO, end: ISO }, ...]
+// FreeBusy по дизайну отдаёт ТОЛЬКО интервалы занятости, без названий
+// событий — мы физически не получаем "что" за событие, только "занято".
+//
+// ВАЖНО: при ЛЮБОЙ проблеме (Google не подключён, токен мёртв, API упал,
+// таймаут) возвращаем [] — это значит "занятости из Google нет",
+// booking покажет слоты как раньше. Лучше так, чем сломать запись.
+async function getGoogleBusy(userId, timeMinISO, timeMaxISO) {
+  try {
+    const accessToken = await getFreshAccessToken(userId)
+    if (!accessToken) {
+      // Google не подключён или токен не удалось обновить
+      return []
+    }
+
+    // Прямой REST-запрос к Google FreeBusy.
+    // Node 18+ на Railway имеет глобальный fetch.
+    // AbortController — таймаут 5с, чтобы медленный Google не тормозил booking.
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 5000)
+
+    let resp
+    try {
+      resp = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          timeMin: timeMinISO,
+          timeMax: timeMaxISO,
+          items: [{ id: 'primary' }], // основной календарь коуча
+        }),
+        signal: controller.signal,
+      })
+    } finally {
+      clearTimeout(timeout)
+    }
+
+    if (!resp || !resp.ok) {
+      console.error(
+        `getGoogleBusy: Google ответил ${resp ? resp.status : 'нет ответа'} (user ${userId})`
+      )
+      return []
+    }
+
+    const data = await resp.json()
+    const busy = data?.calendars?.primary?.busy
+
+    if (!Array.isArray(busy)) {
+      return []
+    }
+
+    // Нормализуем: только валидные пары {start, end}
+    return busy
+      .filter(b => b && b.start && b.end)
+      .map(b => ({ start: b.start, end: b.end }))
+  } catch (err) {
+    // Таймаут, сеть, парсинг — всё сюда. Booking не должен пострадать.
+    console.error(`getGoogleBusy error (user ${userId}):`, err.message)
+    return []
+  }
+}
+
+// =========================================================
+// ВРЕМЕННЫЙ тестовый endpoint (Шаг 2 проверки).
+// Возвращает занятость текущего коуча из Google за указанный день.
+// Нужен ТОЛЬКО чтобы глазами сверить с реальным Google-календарём.
+// УДАЛИМ после успешной проверки, до встройки в booking.
+// Не влияет на запись клиентов — отдельный путь, читает только.
+// Пример: GET /integrations/_debug/freebusy?date=2026-05-19
+// =========================================================
+router.get('/_debug/freebusy', auth, async (req, res) => {
+  try {
+    const date = req.query.date // YYYY-MM-DD
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'Передай ?date=YYYY-MM-DD' })
+    }
+
+    // Берём весь день в UTC (грубо, для проверки достаточно)
+    const timeMin = `${date}T00:00:00.000Z`
+    const timeMax = `${date}T23:59:59.999Z`
+
+    const busy = await getGoogleBusy(req.userId, timeMin, timeMax)
+
+    res.json({
+      userId: req.userId,
+      date,
+      timeMin,
+      timeMax,
+      busy_count: busy.length,
+      busy, // [{start, end}] в ISO/UTC, как отдал Google
+    })
+  } catch (err) {
+    console.error('GET /integrations/_debug/freebusy error:', err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 module.exports = router
+module.exports.getFreshAccessToken = getFreshAccessToken
+module.exports.getGoogleBusy = getGoogleBusy
