@@ -3,6 +3,9 @@ const router = express.Router()
 const pool = require('./db')
 const jwt = require('jsonwebtoken')
 const { DateTime } = require('luxon')
+// getGoogleBusy: занятость коуча из его личного Google-календаря (FreeBusy).
+// При ЛЮБОМ сбое Google возвращает [] — booking не ломается.
+const { getGoogleBusy } = require('./integrations')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -250,6 +253,43 @@ router.get('/slots/:slug', async (req, res) => {
       from: b.start.minus({ minutes: b.bufferBefore }),
       to: b.end.plus({ minutes: b.bufferAfter }),
     }))
+
+    // === Занятость из личного Google-календаря коуча (FreeBusy) ===
+    // Окно запроса: запрашиваемый день ± сутки в UTC. Запас нужен потому,
+    // что день в поясе клиента не совпадает с UTC-сутками — без запаса
+    // можно потерять занятость на границе суток.
+    // getGoogleBusy сам обновляет токен и при любой ошибке отдаёт [] —
+    // тогда этот блок просто ничего не добавит, booking не пострадает.
+    try {
+      const gWinStart = DateTime.fromISO(`${date}T00:00:00`, { zone: clientTz })
+        .minus({ days: 1 }).toUTC().toISO()
+      const gWinEnd = DateTime.fromISO(`${date}T00:00:00`, { zone: clientTz })
+        .plus({ days: 2 }).toUTC().toISO()
+
+      const googleBusy = await getGoogleBusy(userId, gWinStart, gWinEnd)
+
+      for (const gb of googleBusy) {
+        // gb.start / gb.end — ISO/UTC от Google. Переводим в пояс клиента
+        // ТЕМ ЖЕ способом (luxon), что и брони — единая временная база.
+        const gStart = DateTime.fromISO(gb.start).setZone(clientTz)
+        const gEnd = DateTime.fromISO(gb.end).setZone(clientTz)
+        if (!gStart.isValid || !gEnd.isValid) continue
+
+        // Берём только то, что пересекает запрашиваемый день в поясе клиента.
+        // (occupied-интервал может частично заходить на соседние сутки —
+        //  isSlotFree всё равно сравнивает по реальному времени, поэтому
+        //  достаточно не отбрасывать пересекающие день интервалы)
+        const dayLo = DateTime.fromISO(`${date}T00:00:00`, { zone: clientTz })
+        const dayHi = dayLo.plus({ days: 1 })
+        if (gEnd <= dayLo || gStart >= dayHi) continue
+
+        busyRanges.push({ from: gStart, to: gEnd })
+      }
+    } catch (e) {
+      // Подстраховка сверх getGoogleBusy: даже если что-то здесь упадёт —
+      // booking продолжает работать без учёта Google.
+      console.error('Google busy merge error (не критично):', e.message)
+    }
 
     // Проверка: свободен ли слот, начинающийся в момент slotStart (DateTime).
     const isSlotFree = (slotStart) => {
