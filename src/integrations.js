@@ -362,6 +362,39 @@ async function getGoogleBusy(userId, timeMinISO, timeMaxISO) {
 }
 
 // =========================================================
+// GET /integrations/google/busy?from=ISO&to=ISO
+// Занятость коуча из его Google за период — для КАЛЕНДАРЯ КОУЧА
+// (Calendar.js рисует серые блоки "Занято"). Постоянный endpoint.
+// Возвращает: { busy: [{ start, end }, ...] } — БЕЗ названий событий
+// (scope freebusy не отдаёт названия — privacy-гарантия Google).
+// При любом сбое getGoogleBusy вернёт [] → календарь просто не покажет
+// занятость, брони отрисуются как обычно.
+// from/to — ISO-строки (фронт шлёт границы видимого диапазона).
+// =========================================================
+router.get('/google/busy', auth, async (req, res) => {
+  try {
+    const { from, to } = req.query
+    if (!from || !to) {
+      return res.status(400).json({ error: 'Передай ?from=ISO&to=ISO' })
+    }
+
+    // Лёгкая валидация: даты должны парситься
+    const fromDate = new Date(from)
+    const toDate = new Date(to)
+    if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+      return res.status(400).json({ error: 'Некорректные from/to' })
+    }
+
+    const busy = await getGoogleBusy(req.userId, fromDate.toISOString(), toDate.toISOString())
+    res.json({ busy })
+  } catch (err) {
+    console.error('GET /integrations/google/busy error:', err)
+    // Не валим календарь — отдаём пустую занятость
+    res.json({ busy: [] })
+  }
+})
+
+// =========================================================
 // ВРЕМЕННЫЙ тестовый endpoint (Шаг 2 проверки).
 // Возвращает занятость текущего коуча из Google за указанный день.
 // Нужен ТОЛЬКО чтобы глазами сверить с реальным Google-календарём.
