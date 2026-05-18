@@ -3,6 +3,7 @@ const router = express.Router()
 const pool = require('./db')
 const jwt = require('jsonwebtoken')
 const crypto = require('crypto')
+const { DateTime } = require('luxon')
 const { notifyNewBooking, notifyBookingCancelled, notifyRescheduleRequest } = require('./telegram')
 const { sendBookingConfirmation, sendCoachNotification, sendBookingCancelledByCoachEmail, sendBookingRescheduleRequestByCoachEmail } = require('./email')
 
@@ -34,17 +35,20 @@ router.post('/', async (req, res) => {
 
     const requireConfirm = meeting.require_confirm || false
 
-    let startTime
-    if (timezone) {
-      const localDateStr = `${date}T${time}:00`
-      const localDate = new Date(new Date(localDateStr).toLocaleString('en-US', { timeZone: timezone }))
-      const utcOffset = new Date(localDateStr) - localDate
-      startTime = new Date(new Date(localDateStr).getTime() + utcOffset)
-    } else {
-      startTime = new Date(`${date}T${time}:00`)
+    // === Расчёт времени брони на LUXON (18.05) ===
+    // ВАЖНО: строим момент времени ТЕМ ЖЕ способом, что schedule.js строит
+    // слот: DateTime.fromISO(`${date}T${time}:00`, { zone: clientTz }).
+    // Иначе бронь сохранится не в то время, которое клиент видел в слотах
+    // (старый код через toLocaleString + ручной utcOffset давал расхождение
+    //  на DST и получасовых поясах). Теперь расчёт идентичен показу слотов.
+    const clientTz = timezone || 'UTC'
+    const dt = DateTime.fromISO(`${date}T${time}:00`, { zone: clientTz })
+    if (!dt.isValid) {
+      return res.status(400).json({ error: 'Неверная дата или время' })
     }
+    const startTime = dt.toJSDate()
+    const endTime = dt.plus({ minutes: meeting.duration }).toJSDate()
 
-    const endTime = new Date(startTime.getTime() + meeting.duration * 60000)
     const videoLink = `https://meet.jit.si/kogda-${meeting_type_id}-${Date.now()}`
     const clientToken = crypto.randomBytes(20).toString('hex')
 
