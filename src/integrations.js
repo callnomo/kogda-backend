@@ -11,11 +11,21 @@ const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI
 // Куда возвращаем коуча в кабинет после подключения/ошибки
 const FRONTEND_URL = 'https://app.kogda.app'
 
-// Scope: ТОЛЬКО доступность (свободен/занят) через FreeBusy.
-// Google технически НЕ отдаёт нам названия/описания событий при этом scope —
-// privacy-гарантия на стороне Google, не на нашей дисциплине.
-// Самый узкий scope для нашей задачи (см. таблицу Calendar API scopes).
-const GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar.freebusy']
+// Scope:
+//  1) calendar.freebusy — ТОЛЬКО доступность (свободен/занят). Чтение
+//     занятости коуча. Google НЕ отдаёт названия событий — privacy-гарантия.
+//  2) calendar.app.created — узкий scope ЗАПИСИ: kogDA создаёт СВОЙ
+//     отдельный календарь "kogDA" внутри Google коуча и пишет брони
+//     только туда. К личным событиям коуча (зубной/ресторан и т.п.)
+//     доступа НЕТ — Google технически не пускает. Это privacy-преимущество
+//     vs конкурентов, которые берут широкий calendar.events.
+// ВАЖНО: app.created — restricted scope. Для ПУБЛИЧНОГО запуска нужен
+// платный аудит CASA (~$540/год). В Testing-режиме (до 100 тест-юзеров)
+// работает бесплатно — этого хватает на разработку и первых коучей.
+const GOOGLE_SCOPES = [
+  'https://www.googleapis.com/auth/calendar.freebusy',
+  'https://www.googleapis.com/auth/calendar.app.created',
+]
 
 // Создаём OAuth-клиента Google
 function makeOAuthClient() {
