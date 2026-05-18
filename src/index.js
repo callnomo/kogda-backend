@@ -9,6 +9,7 @@ const meetingRoutes = require('./meetings')
 const scheduleRoutes = require('./schedule')
 const bookingRoutes = require('./bookings')
 const settingsRoutes = require('./settings')
+const integrationsRoutes = require('./integrations') // NEW: интеграции календарей
 
 // Запускаем cron jobs
 require('./cron')
@@ -41,6 +42,7 @@ app.use('/meetings', meetingRoutes)
 app.use('/schedule', scheduleRoutes)
 app.use('/bookings', bookingRoutes)
 app.use('/settings', settingsRoutes)
+app.use('/integrations', integrationsRoutes) // NEW: интеграции календарей
 
 app.get('/', (req, res) => {
   res.json({ message: 'kogDA API работает!' })
