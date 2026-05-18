@@ -4,6 +4,8 @@ const pool = require('./db')
 const jwt = require('jsonwebtoken')
 const crypto = require('crypto')
 const { DateTime } = require('luxon')
+// getGoogleBusy: занятость коуча из Google (FreeBusy). При сбое → [] (бронь не блокируется ложно)
+const { getGoogleBusy } = require('./integrations')
 const { notifyNewBooking, notifyBookingCancelled, notifyRescheduleRequest } = require('./telegram')
 const { sendBookingConfirmation, sendCoachNotification, sendBookingCancelledByCoachEmail, sendBookingRescheduleRequestByCoachEmail } = require('./email')
 
@@ -51,6 +53,49 @@ router.post('/', async (req, res) => {
 
     const videoLink = `https://meet.jit.si/kogda-${meeting_type_id}-${Date.now()}`
     const clientToken = crypto.randomBytes(20).toString('hex')
+
+    // === АНТИ-ОВЕРБУКИНГ: синхронная проверка перед INSERT (3a-3, 18.05) ===
+    // Закрывает дыру: между показом слотов и подтверждением брони время
+    // могли занять (другой клиент kogDA ИЛИ коуч лично в Google).
+    // 1) Своя база: есть ли активная бронь этого коуча, пересекающая
+    //    [startTime, endTime]. Пересечение интервалов: A.start < B.end && A.end > B.start.
+    const overlap = await pool.query(
+      `SELECT b.id FROM bookings b
+       JOIN meeting_types mt ON b.meeting_type_id = mt.id
+       WHERE mt.user_id = $1
+         AND b.status IN ('confirmed','pending')
+         AND b.start_time < $3
+         AND b.end_time   > $2
+       LIMIT 1`,
+      [meeting.user_id, startTime, endTime]
+    )
+    if (overlap.rows.length > 0) {
+      return res.status(409).json({
+        error: 'slot_taken',
+        message: 'Это время только что заняли. Пожалуйста, выберите другой слот.'
+      })
+    }
+
+    // 2) Google-календарь коуча (FreeBusy). При сбое Google → [] → проверка
+    //    пропускается, бронь НЕ блокируется ложно (своя база уже проверена выше).
+    try {
+      const gBusy = await getGoogleBusy(meeting.user_id, startTime.toISOString(), endTime.toISOString())
+      const conflict = gBusy.some(gb => {
+        const gs = new Date(gb.start)
+        const ge = new Date(gb.end)
+        // пересечение со слотом брони
+        return gs < endTime && ge > startTime
+      })
+      if (conflict) {
+        return res.status(409).json({
+          error: 'slot_taken',
+          message: 'Это время только что заняли. Пожалуйста, выберите другой слот.'
+        })
+      }
+    } catch (e) {
+      // Сбой Google не должен ронять бронь — своя база уже проверена.
+      console.error('Google busy check error (не критично):', e.message)
+    }
 
     const bookingStatus = requireConfirm ? 'pending' : 'confirmed'
     const result = await pool.query(
