@@ -2,6 +2,7 @@ const express = require('express')
 const router = express.Router()
 const pool = require('./db')
 const jwt = require('jsonwebtoken')
+const { DateTime } = require('luxon')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -136,7 +137,21 @@ router.delete('/overrides/:id', auth, async (req, res) => {
   }
 })
 
-// Получить доступные слоты для клиента
+// =========================================================
+// GET /slots/:slug — доступные слоты для клиента
+// =========================================================
+// ВРЕМЯ ПЕРЕПИСАНО НА LUXON (18.05).
+// Принцип:
+//  - clientTz — пояс клиента (из ?timezone, как и было).
+//  - Каждый слот — это КОНКРЕТНЫЙ момент времени (DateTime в clientTz
+//    на запрашиваемую дату), а не абстрактные "минуты от полуночи".
+//  - Занятость (брони) — тоже конкретные интервалы [start, end] во времени.
+//  - Пересечение проверяется по реальным меткам времени.
+//  Это убирает баги старого подхода: парсинг toLocaleString,
+//  переход через полночь, DST, получасовые пояса.
+//  Поведение (какие слоты показываются) — 1:1 как раньше.
+//  Google здесь НЕ трогаем — отдельный следующий шаг.
+// =========================================================
 router.get('/slots/:slug', async (req, res) => {
   const { date, meeting_type_id, timezone } = req.query
   try {
@@ -146,6 +161,21 @@ router.get('/slots/:slug', async (req, res) => {
     const userId = userResult.rows[0].id
     const scheduleType = userResult.rows[0].schedule_type || 'standard'
     const clientTz = timezone || 'UTC'
+
+    // Валидация даты (YYYY-MM-DD). Невалидная → пустой ответ, не падаем.
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.json({ slots: [], day: null })
+    }
+
+    // День недели и человекочитаемое имя дня — стабильно через luxon
+    // (полдень нужной даты в clientTz, чтобы не было сдвига на границе суток)
+    const dayAnchor = DateTime.fromISO(`${date}T12:00:00`, { zone: clientTz })
+    if (!dayAnchor.isValid) {
+      return res.json({ slots: [], day: null })
+    }
+    // luxon weekday: 1=Пн..7=Вс. Нам нужен индекс для DAYS (0=Вс..6=Сб).
+    const dowForName = dayAnchor.weekday % 7 // 7(Вс)->0, 1(Пн)->1, ... 6(Сб)->6
+    const dayName = DAYS[dowForName]
 
     // Параметры услуги
     let duration = 60
@@ -168,23 +198,22 @@ router.get('/slots/:slug', async (req, res) => {
       }
     }
 
-    // Текущее время в часовом поясе клиента
-    const nowInClientTz = new Date(new Date().toLocaleString('en-US', { timeZone: clientTz }))
-    const todayInClientTz = `${nowInClientTz.getFullYear()}-${String(nowInClientTz.getMonth()+1).padStart(2,'0')}-${String(nowInClientTz.getDate()).padStart(2,'0')}`
-    const isToday = date === todayInClientTz
-    const nowMinutes = nowInClientTz.getHours() * 60 + nowInClientTz.getMinutes()
-    const minNoticeMinutes = minNotice * 60
+    // "Сейчас" — абсолютный момент. Сравнения делаем в абсолютном времени,
+    // поэтому отдельно "сегодня в поясе клиента" вычислять не нужно.
+    const now = DateTime.now()
+    // Начало запрашиваемого дня в поясе клиента (для проверки "этот день уже прошёл" и т.п.)
+    const dayStart = DateTime.fromISO(`${date}T00:00:00`, { zone: clientTz })
 
-    // Проверяем исключение для этой даты
+    // Проверяем исключение для этой даты (override закрывает день)
     const overrideResult = await pool.query(
       'SELECT * FROM schedule_overrides WHERE user_id = $1 AND date = $2',
       [userId, date]
     )
     if (overrideResult.rows.length > 0 && !overrideResult.rows[0].is_available) {
-      return res.json({ slots: [], day: DAYS[new Date(date + 'T12:00:00').getDay()], closed: true })
+      return res.json({ slots: [], day: dayName, closed: true })
     }
 
-    // Все активные брони коуча (для подсчёта занятости)
+    // Все активные брони коуча
     const bookingsResult = await pool.query(
       `SELECT b.start_time, b.end_time, mt.buffer_before, mt.buffer_after
        FROM bookings b
@@ -193,46 +222,76 @@ router.get('/slots/:slug', async (req, res) => {
       [userId]
     )
 
-    // Брони на этот день в часовом поясе клиента
-    const dayBookings = bookingsResult.rows.filter(b => {
-      const startInClientTz = new Date(new Date(b.start_time).toLocaleString('en-US', { timeZone: clientTz }))
-      const bookingDate = `${startInClientTz.getFullYear()}-${String(startInClientTz.getMonth()+1).padStart(2,'0')}-${String(startInClientTz.getDate()).padStart(2,'0')}`
-      return bookingDate === date
-    })
+    // Переводим брони в моменты времени в поясе клиента.
+    // start_time/end_time из БД — абсолютные (timestamp). luxon корректно
+    // покажет их в clientTz с учётом DST.
+    const dayBookings = bookingsResult.rows
+      .map(b => {
+        const start = DateTime.fromJSDate(new Date(b.start_time)).setZone(clientTz)
+        const end = DateTime.fromJSDate(new Date(b.end_time)).setZone(clientTz)
+        return {
+          start,
+          end,
+          bufferBefore: b.buffer_before || 0,
+          bufferAfter: b.buffer_after || 0,
+        }
+      })
+      // Только брони, попадающие на запрашиваемый день (в поясе клиента)
+      .filter(b => b.start.toFormat('yyyy-MM-dd') === date)
 
-    // Проверка макс встреч в день
+    // Проверка макс встреч в день (считаем только брони kogDA — как и раньше)
     if (maxPerDay > 0 && dayBookings.length >= maxPerDay) {
-      return res.json({ slots: [], day: DAYS[new Date(date + 'T12:00:00').getDay()], full: true })
+      return res.json({ slots: [], day: dayName, full: true })
     }
 
-    // Занятые диапазоны с буферами
-    const busyRanges = dayBookings.map(b => {
-      const startInClientTz = new Date(new Date(b.start_time).toLocaleString('en-US', { timeZone: clientTz }))
-      const endInClientTz = new Date(new Date(b.end_time).toLocaleString('en-US', { timeZone: clientTz }))
-      return {
-        from: startInClientTz.getHours() * 60 + startInClientTz.getMinutes() - (b.buffer_before || 0),
-        to: endInClientTz.getHours() * 60 + endInClientTz.getMinutes() + (b.buffer_after || 0)
-      }
-    })
+    // Занятые интервалы [from, to] как АБСОЛЮТНЫЕ моменты (с буферами).
+    // Сравнение слотов с занятостью — по реальному времени, не по минутам.
+    const busyRanges = dayBookings.map(b => ({
+      from: b.start.minus({ minutes: b.bufferBefore }),
+      to: b.end.plus({ minutes: b.bufferAfter }),
+    }))
 
+    // Проверка: свободен ли слот, начинающийся в момент slotStart (DateTime).
     const isSlotFree = (slotStart) => {
-      // Прошедшие слоты сегодня
-      if (isToday && slotStart <= nowMinutes) return false
-      // Минимум до записи
-      if (isToday && slotStart < nowMinutes + minNoticeMinutes) return false
-      // Для будущих дней — минимум до записи в абсолютном времени
-      if (!isToday && minNotice > 0) {
-        const slotDatetime = new Date(`${date}T${String(Math.floor(slotStart/60)).padStart(2,'0')}:${String(slotStart%60).padStart(2,'0')}:00`)
-        const nowUtc = new Date()
-        if ((slotDatetime - nowUtc) / (1000 * 60 * 60) < minNotice) return false
+      const slotEndWithBuffer = slotStart.plus({ minutes: duration + bufferAfter })
+      const slotStartWithBuffer = slotStart.minus({ minutes: bufferBefore })
+
+      // 1. Слот не должен быть в прошлом (абсолютное сравнение)
+      if (slotStart <= now) return false
+
+      // 2. Минимальный запас до записи (minNotice часов от "сейчас")
+      if (minNotice > 0) {
+        const diffHours = slotStart.diff(now, 'hours').hours
+        if (diffHours < minNotice) return false
       }
-      // Пересечение с бронями
-      const slotEnd = slotStart + duration + bufferAfter
-      const slotStartWithBuffer = slotStart - bufferBefore
+
+      // 3. Пересечение с занятыми интервалами (брони + буферы)
       for (const range of busyRanges) {
-        if (slotStartWithBuffer < range.to && slotEnd > range.from) return false
+        // пересечение интервалов: startA < endB && endA > startB
+        if (slotStartWithBuffer < range.to && slotEndWithBuffer > range.from) {
+          return false
+        }
       }
       return true
+    }
+
+    // Генерация слотов из рабочего окна [winStartMin, winEndMin] (минуты от
+    // полуночи в clientTz) — но каждый слот сразу превращаем в момент времени.
+    const collectSlots = (winStartMin, winEndMin, out) => {
+      let cur = winStartMin
+      while (cur + duration <= winEndMin) {
+        const h = Math.floor(cur / 60)
+        const m = cur % 60
+        // Момент начала слота: запрашиваемая дата + h:m в поясе клиента
+        const slotStart = DateTime.fromISO(
+          `${date}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`,
+          { zone: clientTz }
+        )
+        if (slotStart.isValid && isSlotFree(slotStart)) {
+          out.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`)
+        }
+        cur += duration
+      }
     }
 
     let slots = []
@@ -245,17 +304,11 @@ router.get('/slots/:slug', async (req, res) => {
       for (const flex of flexResult.rows) {
         const [sh, sm] = flex.start_time.split(':').map(Number)
         const [eh, em] = flex.end_time.split(':').map(Number)
-        let current = sh * 60 + sm
-        const end = eh * 60 + em
-        while (current + duration <= end) {
-          if (isSlotFree(current)) {
-            slots.push(`${Math.floor(current/60).toString().padStart(2,'0')}:${(current%60).toString().padStart(2,'0')}`)
-          }
-          current += duration
-        }
+        collectSlots(sh * 60 + sm, eh * 60 + em, slots)
       }
     } else {
-      const dayOfWeek = new Date(date + 'T12:00:00').getDay()
+      // luxon weekday 1..7 (Пн..Вс) → старый getDay() 0..6 (Вс..Сб)
+      const dayOfWeek = dayAnchor.weekday % 7
       const scheduleResult = await pool.query(
         'SELECT * FROM schedules WHERE user_id = $1 AND day_of_week = $2 AND is_active = true',
         [userId, dayOfWeek]
@@ -264,18 +317,11 @@ router.get('/slots/:slug', async (req, res) => {
         const schedule = scheduleResult.rows[0]
         const [sh, sm] = schedule.start_time.split(':').map(Number)
         const [eh, em] = schedule.end_time.split(':').map(Number)
-        let current = sh * 60 + sm
-        const end = eh * 60 + em
-        while (current + duration <= end) {
-          if (isSlotFree(current)) {
-            slots.push(`${Math.floor(current/60).toString().padStart(2,'0')}:${(current%60).toString().padStart(2,'0')}`)
-          }
-          current += duration
-        }
+        collectSlots(sh * 60 + sm, eh * 60 + em, slots)
       }
     }
 
-    res.json({ slots, day: DAYS[new Date(date + 'T12:00:00').getDay()] })
+    res.json({ slots, day: dayName })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
