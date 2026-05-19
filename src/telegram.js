@@ -2,7 +2,7 @@ const TelegramBot = require('node-telegram-bot-api')
 const pool = require('./db')
 // Рефакторинг Б: общая бизнес-логика подтверждения брони (и далее — отмены/
 // переноса). См. src/bookingLifecycle.js. Шаг Б.1 — confirmBooking.
-const { confirmBooking } = require('./bookingLifecycle')
+const { confirmBooking, cancelBooking } = require('./bookingLifecycle')
 
 const bot = process.env.TELEGRAM_BOT_TOKEN
   ? new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: { autoStart: true, params: { timeout: 10 } } })
@@ -60,47 +60,14 @@ if (bot) {
         }
       }
 
-      // Отклонить новую бронь
-      // ОБНОВЛЕНО: отправляем клиенту email об отмене
+      // Отклонить новую бронь — общая логика в bookingLifecycle.cancelBooking
+      // (UPDATE status='cancelled' + email клиенту). Бот здесь только
+      // редактирует inline-сообщение на "❌ Встреча отклонена.".
       else if (data.startsWith('reject_booking_')) {
         const bookingId = data.replace('reject_booking_', '')
-
-        // Получаем полные данные ДО update — нужны для email
-        const fullResult = await pool.query(
-          `SELECT b.*, mt.title as meeting_title, u.name as expert_name
-           FROM bookings b
-           JOIN meeting_types mt ON b.meeting_type_id = mt.id
-           JOIN users u ON mt.user_id = u.id
-           WHERE b.id = $1`,
-          [bookingId]
-        )
-
-        await pool.query(
-          'UPDATE bookings SET status = $1 WHERE id = $2',
-          ['cancelled', bookingId]
-        )
-
-        if (fullResult.rows.length > 0) {
-          const booking = fullResult.rows[0]
-
-          // Email клиенту с уведомлением
-          try {
-            const { sendBookingCancelledByCoachEmail } = require('./email')
-            const startDate = new Date(booking.start_time)
-            const dateIso = `${startDate.getFullYear()}-${String(startDate.getMonth()+1).padStart(2,'0')}-${String(startDate.getDate()).padStart(2,'0')}`
-            const timeRu = startDate.toTimeString().slice(0, 5)
-            await sendBookingCancelledByCoachEmail(
-              booking.client_email,
-              booking.client_name,
-              booking.meeting_title,
-              dateIso,
-              timeRu,
-              booking.expert_name
-            )
-          } catch (err) {
-            console.error('Email cancelled by coach error:', err)
-          }
-
+        const r = await cancelBooking(bookingId)
+        if (r.ok && r.meeting) {
+          const booking = r.booking
           bot.editMessageText(`❌ <b>Встреча отклонена.</b>\n\n👤 ${booking.client_name} получил письмо об отмене.`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' })
         }
       }

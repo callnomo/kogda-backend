@@ -10,7 +10,7 @@ const { notifyNewBooking, notifyBookingCancelled, notifyRescheduleRequest } = re
 const { sendBookingConfirmation, sendCoachNotification, sendBookingCancelledByCoachEmail, sendBookingRescheduleRequestByCoachEmail } = require('./email')
 // Рефакторинг Б: общая бизнес-логика 4 действий жизненного цикла брони.
 // confirmBooking — Шаг Б.1; вызывается также из telegram.js (callback кнопки).
-const { confirmBooking } = require('./bookingLifecycle')
+const { confirmBooking, cancelBooking } = require('./bookingLifecycle')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -299,46 +299,44 @@ router.get('/', auth, async (req, res) => {
 
 // Коуч отменяет/отклоняет бронь
 // Используется и для отмены confirmed, и для отклонения pending
-// 1) UPDATE status = 'cancelled'
-// 2) Telegram коучу (notifyBookingCancelled)
-// 3) Email клиенту (sendBookingCancelledByCoachEmail) — встреча отменена
+// Б.2 рефакторинг: бизнес-логика (UPDATE + email клиенту) — в
+// bookingLifecycle.cancelBooking, общая с telegram.js (callback reject_booking_).
+// Owner-check остаётся ЗДЕСЬ (вне helper) — боту он не нужен.
+// notifyBookingCancelled (Telegram коучу) остаётся ЗДЕСЬ — web шлёт новое
+// сообщение, бот редактирует существующее, поведение не унифицируется.
+//
+// ПОРЯДОК ОПЕРАЦИЙ ИЗМЕНИЛСЯ относительно прежнего web-кода:
+//   Было:  SELECT → owner-check → notify(TG) → email → UPDATE
+//   Стало: SELECT → owner-check → cancelBooking(UPDATE → email) → notify(TG)
+// То есть Telegram-уведомление коучу теперь приходит ПОСЛЕ email клиенту и
+// ПОСЛЕ UPDATE (раньше — до). Семантика та же, конечное состояние идентично.
 router.patch('/:id/cancel', auth, async (req, res) => {
   try {
-    const bookingResult = await pool.query(
-      `SELECT b.*, mt.title as meeting_title, mt.user_id, u.name as expert_name, u.slug as expert_slug
-       FROM bookings b
-       JOIN meeting_types mt ON b.meeting_type_id = mt.id
-       JOIN users u ON mt.user_id = u.id
-       WHERE b.id = $1`,
+    // Owner-check: нужен ДО helper. Достаём только user_id брони.
+    const ownerResult = await pool.query(
+      'SELECT mt.user_id FROM bookings b JOIN meeting_types mt ON b.meeting_type_id = mt.id WHERE b.id = $1',
       [req.params.id]
     )
-    if (bookingResult.rows.length === 0) {
+    if (ownerResult.rows.length === 0) {
       return res.status(404).json({ error: 'Not found' })
     }
-
-    const booking = bookingResult.rows[0]
-
-    if (booking.user_id !== req.userId) {
+    if (ownerResult.rows[0].user_id !== req.userId) {
       return res.status(403).json({ error: 'Forbidden' })
     }
 
-    const startDate = new Date(booking.start_time)
+    // Бизнес-логика: UPDATE + email клиенту (см. cancelBooking).
+    const r = await cancelBooking(req.params.id)
+    if (r.code === 'not_found') {
+      // Гонка: бронь удалили между owner-check и helper. Крайне маловероятно.
+      return res.status(404).json({ error: 'Not found' })
+    }
+
+    // Telegram коучу — web-специфично, вне helper.
+    const startDate = new Date(r.booking.start_time)
     const dateRu = startDate.toLocaleDateString('ru-RU')
     const timeRu = startDate.toTimeString().slice(0, 5)
-    const dateIso = `${startDate.getFullYear()}-${String(startDate.getMonth()+1).padStart(2,'0')}-${String(startDate.getDate()).padStart(2,'0')}`
+    notifyBookingCancelled(r.booking.client_name, r.meeting.title, dateRu, timeRu, r.meeting.user_id)
 
-    notifyBookingCancelled(booking.client_name, booking.meeting_title, dateRu, timeRu, booking.user_id)
-
-    sendBookingCancelledByCoachEmail(
-      booking.client_email,
-      booking.client_name,
-      booking.meeting_title,
-      dateIso,
-      timeRu,
-      booking.expert_name
-    )
-
-    await pool.query('UPDATE bookings SET status = $1 WHERE id = $2', ['cancelled', req.params.id])
     res.json({ success: true })
   } catch (err) {
     console.error('[bookings cancel]', err)
