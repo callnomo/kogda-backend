@@ -120,24 +120,36 @@ router.post('/', async (req, res) => {
 
     if (!requireConfirm) {
       sendBookingConfirmation(client_email, client_name, meeting.title, date, time, videoLink, meeting.expert_name, clientToken)
-    }
 
-    // Google-запись брони (Шаг 3b): пишем событие в наш изолированный календарь
-    // "kogDA" внутри Google коуча. Без await — это побочный эффект, не критический
-    // путь. Функция сама ловит все ошибки и возвращает { ok:false } вместо throw,
-    // поэтому try/catch не нужен. Если Google не подключён, не работает или
-    // вернул 4xx/5xx — бронь и нотификации уже произошли, клиенту всё ок.
-    createBookingEvent(meeting.user_id, {
-      summary: meeting.title,
-      description: `Клиент: ${client_name}\nЗапись через kogDA`,
-      startISO: startTime.toISOString(),
-      endISO: endTime.toISOString(),
-      timezone: clientTz,
-    }).then(result => {
-      if (!result.ok) {
-        console.error(`[booking ${booking.id}] Google event skip: ${result.reason}`)
-      }
-    })
+      // Google-запись брони (Шаг 3b + 3b-2 Шаг B):
+      //  - ТОЛЬКО для сразу подтверждённых броней. Для pending событие в Google
+      //    создастся позже, когда коуч нажмёт "Подтвердить" (следующий шаг 3b-2).
+      //  - При успехе сохраняем eventId+calendarId в саму бронь — нужно чтобы
+      //    потом удалить/перенести Google-событие при отмене/переносе брони.
+      //  - Без await — побочный эффект, не критический путь. Любая ошибка
+      //    (Google или UPDATE) только логируется: бронь и нотификации уже
+      //    произошли, клиенту ответ ушёл.
+      createBookingEvent(meeting.user_id, {
+        summary: meeting.title,
+        description: `Клиент: ${client_name}\nЗапись через kogDA`,
+        startISO: startTime.toISOString(),
+        endISO: endTime.toISOString(),
+        timezone: clientTz,
+      }).then(async result => {
+        if (!result.ok) {
+          console.error(`[booking ${booking.id}] Google event skip: ${result.reason}`)
+          return
+        }
+        try {
+          await pool.query(
+            `UPDATE bookings SET google_event_id = $1, google_calendar_id = $2 WHERE id = $3`,
+            [result.eventId, result.calendarId, booking.id]
+          )
+        } catch (err) {
+          console.error(`[booking ${booking.id}] save google_event_id failed:`, err.message)
+        }
+      })
+    }
 
     res.json({ booking, video_link: videoLink })
   } catch (err) {
