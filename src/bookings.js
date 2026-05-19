@@ -165,7 +165,7 @@ router.post('/', async (req, res) => {
 router.get('/client/:token', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT b.*, mt.title as meeting_title, mt.duration, u.name as expert_name
+      `SELECT b.*, mt.title as meeting_title, mt.duration, u.name as expert_name, u.slug as expert_slug
        FROM bookings b
        JOIN meeting_types mt ON b.meeting_type_id = mt.id
        JOIN users u ON mt.user_id = u.id
