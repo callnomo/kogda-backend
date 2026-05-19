@@ -243,24 +243,59 @@ router.patch("/:id/confirm", auth, async (req, res) => {
     )
     if (result.rows.length > 0 && wasPending) {
       const booking = result.rows[0]
+      // Подтягиваем title услуги, expert_name И user_id коуча — последний
+      // нужен для createBookingEvent (раньше он не выбирался).
       const meetingResult = await pool.query(
-        "SELECT mt.title, u.name as expert_name FROM meeting_types mt JOIN users u ON mt.user_id = u.id WHERE mt.id = $1",
+        "SELECT mt.title, mt.user_id, u.name as expert_name FROM meeting_types mt JOIN users u ON mt.user_id = u.id WHERE mt.id = $1",
         [booking.meeting_type_id]
       )
       if (meetingResult.rows.length > 0) {
+        const meeting = meetingResult.rows[0]
         const startDate = new Date(booking.start_time)
         const date = `${startDate.getFullYear()}-${String(startDate.getMonth()+1).padStart(2,'0')}-${String(startDate.getDate()).padStart(2,'0')}`
         const time = `${String(startDate.getHours()).padStart(2,'0')}:${String(startDate.getMinutes()).padStart(2,'0')}`
         await sendBookingConfirmation(
           booking.client_email,
           booking.client_name,
-          meetingResult.rows[0].title,
+          meeting.title,
           date,
           time,
           booking.video_link,
-          meetingResult.rows[0].expert_name,
+          meeting.expert_name,
           booking.client_token
         )
+
+        // Google-запись брони (3b-2 Шаг C.3):
+        //  - Срабатывает ТОЛЬКО на переходе pending → confirmed (wasPending).
+        //    Если бронь уже была confirmed и /confirm дёрнули повторно — мы
+        //    сюда не зайдём, дубль-события не будет.
+        //  - Таймзону берём из booking.client_timezone (сохранена на C.2).
+        //    Для старых pending-броней (созданных до C.2) там NULL —
+        //    fallback на 'UTC': момент времени в Google всё равно правильный
+        //    (start_time из БД — UTC-instant), tz влияет только на лейбл.
+        //  - Контракт ошибок такой же как в авто-confirmed ветке:
+        //    Google или UPDATE падают — только лог, /confirm всё равно ок.
+        const tz = booking.client_timezone || 'UTC'
+        createBookingEvent(meeting.user_id, {
+          summary: meeting.title,
+          description: `Клиент: ${booking.client_name}\nЗапись через kogDA`,
+          startISO: new Date(booking.start_time).toISOString(),
+          endISO: new Date(booking.end_time).toISOString(),
+          timezone: tz,
+        }).then(async gResult => {
+          if (!gResult.ok) {
+            console.error(`[booking ${booking.id}] Google event skip on confirm: ${gResult.reason}`)
+            return
+          }
+          try {
+            await pool.query(
+              `UPDATE bookings SET google_event_id = $1, google_calendar_id = $2 WHERE id = $3`,
+              [gResult.eventId, gResult.calendarId, booking.id]
+            )
+          } catch (err) {
+            console.error(`[booking ${booking.id}] save google_event_id on confirm failed:`, err.message)
+          }
+        })
       }
     }
     res.json({ success: true })
