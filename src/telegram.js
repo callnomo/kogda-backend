@@ -1,5 +1,8 @@
 const TelegramBot = require('node-telegram-bot-api')
 const pool = require('./db')
+// Рефакторинг Б: общая бизнес-логика подтверждения брони (и далее — отмены/
+// переноса). См. src/bookingLifecycle.js. Шаг Б.1 — confirmBooking.
+const { confirmBooking } = require('./bookingLifecycle')
 
 const bot = process.env.TELEGRAM_BOT_TOKEN
   ? new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: { autoStart: true, params: { timeout: 10 } } })
@@ -41,30 +44,18 @@ if (bot) {
     const messageId = query.message.message_id
 
     try {
-      // Подтвердить новую бронь
+      // Подтвердить новую бронь — общая логика в bookingLifecycle.confirmBooking
+      // (CAS-UPDATE, email, Google-событие). Бот здесь только редактирует
+      // inline-сообщение в чате на "✅ Встреча подтверждена!".
       if (data.startsWith('confirm_booking_')) {
         const bookingId = data.replace('confirm_booking_', '')
-
-        const current = await pool.query('SELECT status FROM bookings WHERE id = $1', [bookingId])
-        const wasPending = current.rows.length > 0 && current.rows[0].status === 'pending'
-
-        const result = await pool.query(
-          'UPDATE bookings SET status = $1 WHERE id = $2 RETURNING *',
-          ['confirmed', bookingId]
-        )
-        if (result.rows.length > 0) {
-          const booking = result.rows[0]
-          const meetingResult = await pool.query(
-            'SELECT mt.title, u.name as expert_name FROM meeting_types mt JOIN users u ON mt.user_id = u.id WHERE mt.id = $1',
-            [booking.meeting_type_id]
-          )
-          if (meetingResult.rows.length > 0 && wasPending) {
-            const { sendBookingConfirmation } = require('./email')
-            const startDate = new Date(booking.start_time)
-            const date = `${startDate.getFullYear()}-${String(startDate.getMonth()+1).padStart(2,'0')}-${String(startDate.getDate()).padStart(2,'0')}`
-            const time = `${String(startDate.getHours()).padStart(2,'0')}:${String(startDate.getMinutes()).padStart(2,'0')}`
-            await sendBookingConfirmation(booking.client_email, booking.client_name, meetingResult.rows[0].title, date, time, booking.video_link, meetingResult.rows[0].expert_name, booking.client_token)
-          }
+        const r = await confirmBooking(bookingId)
+        // r.meeting != null только при РЕАЛЬНОМ переходе pending→confirmed
+        // (см. bookingLifecycle.confirmBooking). На no-op (бронь уже была
+        // confirmed/cancelled) helper вернёт r.ok=true, r.meeting=null —
+        // сообщение в чате не переписываем, чтобы не врать об отменённой броне.
+        if (r.ok && r.meeting) {
+          const booking = r.booking
           bot.editMessageText(`✅ <b>Встреча подтверждена!</b>\n\n👤 ${booking.client_name}\n🗓 ${new Date(booking.start_time).toLocaleDateString('ru-RU')} в ${new Date(booking.start_time).toTimeString().slice(0,5)}\n\nКлиент получил письмо с подтверждением.`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' })
         }
       }
