@@ -256,4 +256,54 @@ async function confirmReschedule(bookingId) {
   return { ok: true, code: 'ok', booking, meeting }
 }
 
-module.exports = { confirmBooking, cancelBooking, confirmReschedule }
+// rejectReschedule(bookingId) — Шаг Б.4 рефакторинга.
+// Коуч отклоняет запрошенный клиентом перенос: бронь остаётся в прежнее
+// время, статус откатывается в 'confirmed', поля reschedule_request /
+// reschedule_time очищаются.
+//
+// Что делает helper:
+//   1) SELECT b.* по id. Нет → not_found.
+//   2) SELECT meeting info JOIN (title, user_id, expert_name) — для возврата
+//      вызывающему (нужен для условия `if (r.ok && r.meeting)` в боте и
+//      для будущих писем — сейчас не используется).
+//   3) UPDATE status='confirmed', reschedule_request=NULL, reschedule_time=NULL
+//      RETURNING * → обновлённая бронь.
+//
+// Чего helper НЕ делает (по плану):
+//   - НЕ шлёт email (для клиента это дыра №4 — отдельный будущий шаг).
+//   - НЕ проверяет ownership (в текущем web-роуте owner-check ОТСУТСТВУЕТ,
+//     поведение не меняем).
+//
+// Возвращает:
+//   { ok:false, code:'not_found', booking:null, meeting:null }
+//   { ok:true,  code:'ok', booking, meeting:{title,user_id,expert_name} }
+//   { ok:true,  code:'ok', booking, meeting:null } — meeting_type удалён
+async function rejectReschedule(bookingId) {
+  const sel = await pool.query('SELECT * FROM bookings WHERE id = $1', [bookingId])
+  if (sel.rows.length === 0) {
+    return { ok: false, code: 'not_found', booking: null, meeting: null }
+  }
+  const before = sel.rows[0]
+
+  const mr = await pool.query(
+    'SELECT mt.title, mt.user_id, u.name as expert_name FROM meeting_types mt JOIN users u ON mt.user_id = u.id WHERE mt.id = $1',
+    [before.meeting_type_id]
+  )
+  const meetingRow = mr.rows[0] || null
+
+  const upd = await pool.query(
+    "UPDATE bookings SET status = 'confirmed', reschedule_request = NULL, reschedule_time = NULL WHERE id = $1 RETURNING *",
+    [bookingId]
+  )
+  const booking = upd.rows[0]
+
+  const meeting = meetingRow ? {
+    title: meetingRow.title,
+    user_id: meetingRow.user_id,
+    expert_name: meetingRow.expert_name,
+  } : null
+
+  return { ok: true, code: 'ok', booking, meeting }
+}
+
+module.exports = { confirmBooking, cancelBooking, confirmReschedule, rejectReschedule }

@@ -2,7 +2,7 @@ const TelegramBot = require('node-telegram-bot-api')
 const pool = require('./db')
 // Рефакторинг Б: общая бизнес-логика подтверждения брони (и далее — отмены/
 // переноса). См. src/bookingLifecycle.js. Шаг Б.1 — confirmBooking.
-const { confirmBooking, cancelBooking, confirmReschedule } = require('./bookingLifecycle')
+const { confirmBooking, cancelBooking, confirmReschedule, rejectReschedule } = require('./bookingLifecycle')
 
 const bot = process.env.TELEGRAM_BOT_TOKEN
   ? new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: { autoStart: true, params: { timeout: 10 } } })
@@ -86,14 +86,15 @@ if (bot) {
         }
       }
 
-      // Отклонить перенос
+      // Отклонить перенос — общая логика в bookingLifecycle.rejectReschedule
+      // (SELECT + UPDATE). Бот здесь только редактирует сообщение на
+      // "❌ Перенос отклонён.". Текст 1-в-1 как раньше.
       else if (data.startsWith('reject_reschedule_')) {
         const bookingId = data.replace('reject_reschedule_', '')
-        await pool.query(
-          'UPDATE bookings SET status = $1, reschedule_request = NULL, reschedule_time = NULL WHERE id = $2',
-          ['confirmed', bookingId]
-        )
-        bot.editMessageText(`❌ <b>Перенос отклонён.</b>\n\nВстреча остаётся в прежнее время.`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' })
+        const r = await rejectReschedule(bookingId)
+        if (r.ok && r.meeting) {
+          bot.editMessageText(`❌ <b>Перенос отклонён.</b>\n\nВстреча остаётся в прежнее время.`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' })
+        }
       }
 
       bot.answerCallbackQuery(query.id)

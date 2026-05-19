@@ -10,7 +10,7 @@ const { notifyNewBooking, notifyBookingCancelled, notifyRescheduleRequest } = re
 const { sendBookingConfirmation, sendCoachNotification, sendBookingCancelledByCoachEmail, sendBookingRescheduleRequestByCoachEmail } = require('./email')
 // Рефакторинг Б: общая бизнес-логика 4 действий жизненного цикла брони.
 // confirmBooking — Шаг Б.1; вызывается также из telegram.js (callback кнопки).
-const { confirmBooking, cancelBooking, confirmReschedule } = require('./bookingLifecycle')
+const { confirmBooking, cancelBooking, confirmReschedule, rejectReschedule } = require('./bookingLifecycle')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -264,14 +264,21 @@ router.patch('/:id/confirm-reschedule', auth, async (req, res) => {
 })
 
 // Коуч отклоняет перенос
+// Б.4 рефакторинг: вся логика (SELECT + UPDATE) — в
+// bookingLifecycle.rejectReschedule, общая с telegram.js (callback
+// reject_reschedule_). Owner-check в текущем коде ОТСУТСТВОВАЛ — не добавляем.
+// ИЗМЕНЕНИЕ ПОВЕДЕНИЯ: раньше при отсутствии брони UPDATE 0 строк отвечал
+// 200 success:true (тихий no-op). Теперь helper возвращает not_found → 404.
+// Симметрично с /confirm-reschedule (там та же семантика после Б.3).
+// Фронт (Bookings.js:136) тело не читает, только статус → разница только в
+// catch-ветке у axios (нет toast/alert на 404 в UI — это сохранено как было).
 router.patch('/:id/reject-reschedule', auth, async (req, res) => {
   try {
-    await pool.query(
-      'UPDATE bookings SET status = $1, reschedule_request = NULL, reschedule_time = NULL WHERE id = $2',
-      ['confirmed', req.params.id]
-    )
+    const r = await rejectReschedule(req.params.id)
+    if (r.code === 'not_found') return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
+    console.error('[bookings reject-reschedule]', err)
     res.status(500).json({ error: 'Server error' })
   }
 })
