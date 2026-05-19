@@ -2,7 +2,7 @@ const TelegramBot = require('node-telegram-bot-api')
 const pool = require('./db')
 // Рефакторинг Б: общая бизнес-логика подтверждения брони (и далее — отмены/
 // переноса). См. src/bookingLifecycle.js. Шаг Б.1 — confirmBooking.
-const { confirmBooking, cancelBooking } = require('./bookingLifecycle')
+const { confirmBooking, cancelBooking, confirmReschedule } = require('./bookingLifecycle')
 
 const bot = process.env.TELEGRAM_BOT_TOKEN
   ? new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: { autoStart: true, params: { timeout: 10 } } })
@@ -72,20 +72,17 @@ if (bot) {
         }
       }
 
-      // Подтвердить перенос
+      // Подтвердить перенос — общая логика в bookingLifecycle.confirmReschedule
+      // (SELECT + расчёт newEndTime + UPDATE). Бот здесь только редактирует
+      // сообщение на "✅ Перенос подтверждён!". Текст 1-в-1 как раньше; в
+      // источнике даты — booking.start_time (после UPDATE равен старому
+      // reschedule_time), печатаемая строка идентична прежней.
       else if (data.startsWith('confirm_reschedule_')) {
         const bookingId = data.replace('confirm_reschedule_', '')
-        const bookingResult = await pool.query('SELECT * FROM bookings WHERE id = $1', [bookingId])
-        if (bookingResult.rows.length > 0) {
-          const booking = bookingResult.rows[0]
-          const meetingResult = await pool.query('SELECT duration FROM meeting_types WHERE id = $1', [booking.meeting_type_id])
-          const duration = meetingResult.rows[0]?.duration || 60
-          const newEndTime = new Date(new Date(booking.reschedule_time).getTime() + duration * 60000)
-          await pool.query(
-            'UPDATE bookings SET start_time = $1, end_time = $2, status = $3, reschedule_request = NULL, reschedule_time = NULL WHERE id = $4',
-            [booking.reschedule_time, newEndTime, 'confirmed', bookingId]
-          )
-          bot.editMessageText(`✅ <b>Перенос подтверждён!</b>\n\n👤 ${booking.client_name}\n🗓 ${new Date(booking.reschedule_time).toLocaleDateString('ru-RU')} в ${new Date(booking.reschedule_time).toTimeString().slice(0,5)}`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' })
+        const r = await confirmReschedule(bookingId)
+        if (r.ok && r.meeting) {
+          const booking = r.booking
+          bot.editMessageText(`✅ <b>Перенос подтверждён!</b>\n\n👤 ${booking.client_name}\n🗓 ${new Date(booking.start_time).toLocaleDateString('ru-RU')} в ${new Date(booking.start_time).toTimeString().slice(0,5)}`, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML' })
         }
       }
 

@@ -10,7 +10,7 @@ const { notifyNewBooking, notifyBookingCancelled, notifyRescheduleRequest } = re
 const { sendBookingConfirmation, sendCoachNotification, sendBookingCancelledByCoachEmail, sendBookingRescheduleRequestByCoachEmail } = require('./email')
 // Рефакторинг Б: общая бизнес-логика 4 действий жизненного цикла брони.
 // confirmBooking — Шаг Б.1; вызывается также из telegram.js (callback кнопки).
-const { confirmBooking, cancelBooking } = require('./bookingLifecycle')
+const { confirmBooking, cancelBooking, confirmReschedule } = require('./bookingLifecycle')
 
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]
@@ -247,22 +247,18 @@ router.patch("/:id/confirm", auth, async (req, res) => {
 })
 
 // Коуч подтверждает перенос
+// Б.3 рефакторинг: вся логика (SELECT, расчёт newEndTime, UPDATE) — в
+// bookingLifecycle.confirmReschedule, общая с telegram.js (callback
+// confirm_reschedule_). Owner-check в текущем коде ОТСУТСТВОВАЛ — не добавляем.
+// Фронт (Bookings.js:126) ждёт только HTTP 200/404, тело не читает — контракт
+// сохранён: { success: true } / { error: 'Not found' }.
 router.patch('/:id/confirm-reschedule', auth, async (req, res) => {
   try {
-    const bookingResult = await pool.query('SELECT * FROM bookings WHERE id = $1', [req.params.id])
-    if (bookingResult.rows.length === 0) return res.status(404).json({ error: 'Not found' })
-    const booking = bookingResult.rows[0]
-
-    const meetingResult = await pool.query('SELECT duration FROM meeting_types WHERE id = $1', [booking.meeting_type_id])
-    const duration = meetingResult.rows[0]?.duration || 60
-    const newEndTime = new Date(new Date(booking.reschedule_time).getTime() + duration * 60000)
-
-    await pool.query(
-      'UPDATE bookings SET start_time = $1, end_time = $2, status = $3, reschedule_request = NULL, reschedule_time = NULL WHERE id = $4',
-      [booking.reschedule_time, newEndTime, 'confirmed', req.params.id]
-    )
+    const r = await confirmReschedule(req.params.id)
+    if (r.code === 'not_found') return res.status(404).json({ error: 'Not found' })
     res.json({ success: true })
   } catch (err) {
+    console.error('[bookings confirm-reschedule]', err)
     res.status(500).json({ error: 'Server error' })
   }
 })

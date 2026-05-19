@@ -197,4 +197,63 @@ async function cancelBooking(bookingId) {
   }
 }
 
-module.exports = { confirmBooking, cancelBooking }
+// confirmReschedule(bookingId) — Шаг Б.3 рефакторинга.
+// Коуч подтверждает запрошенный клиентом перенос: бронь переходит обратно в
+// 'confirmed' с НОВЫМ временем (reschedule_time → start_time, новый end_time
+// считается через mt.duration), поля reschedule_request/reschedule_time
+// очищаются.
+//
+// Что делает helper (1-в-1 с прежним web-кодом и bot-веткой):
+//   1) SELECT b.* по id. Нет → not_found.
+//   2) SELECT mt.duration + meeting info (title, user_id, expert_name) JOIN.
+//      duration берётся с fallback `|| 60` — поведение текущего кода.
+//      Если meeting_type удалён — meeting:null, но действие выполняем
+//      (как в текущем коде: `?.duration || 60` не падал).
+//   3) newEndTime = reschedule_time + duration*60000.
+//   4) UPDATE start_time, end_time, status='confirmed', reschedule_request=NULL,
+//      reschedule_time=NULL RETURNING * → обновлённая бронь.
+//
+// Чего helper НЕ делает (по плану):
+//   - НЕ шлёт email (для клиента это дыра, отдельный будущий шаг).
+//   - НЕ трогает Google Calendar (отдельный будущий шаг #5).
+//   - НЕ проверяет ownership (в текущем web-роуте owner-check ОТСУТСТВУЕТ,
+//     поведение не меняем).
+//
+// Возвращает:
+//   { ok:false, code:'not_found', booking:null, meeting:null }
+//   { ok:true,  code:'ok', booking, meeting:{title,user_id,expert_name} }
+//   { ok:true,  code:'ok', booking, meeting:null } — meeting_type удалён
+//
+// Примечание для вызывающих: в возвращённом booking поле reschedule_time = NULL
+// (это уже пост-UPDATE состояние). Новое время встречи — в booking.start_time.
+async function confirmReschedule(bookingId) {
+  const sel = await pool.query('SELECT * FROM bookings WHERE id = $1', [bookingId])
+  if (sel.rows.length === 0) {
+    return { ok: false, code: 'not_found', booking: null, meeting: null }
+  }
+  const before = sel.rows[0]
+
+  const mr = await pool.query(
+    'SELECT mt.duration, mt.title, mt.user_id, u.name as expert_name FROM meeting_types mt JOIN users u ON mt.user_id = u.id WHERE mt.id = $1',
+    [before.meeting_type_id]
+  )
+  const meetingRow = mr.rows[0] || null
+  const duration = meetingRow?.duration || 60
+  const newEndTime = new Date(new Date(before.reschedule_time).getTime() + duration * 60000)
+
+  const upd = await pool.query(
+    "UPDATE bookings SET start_time = $1, end_time = $2, status = 'confirmed', reschedule_request = NULL, reschedule_time = NULL WHERE id = $3 RETURNING *",
+    [before.reschedule_time, newEndTime, bookingId]
+  )
+  const booking = upd.rows[0]
+
+  const meeting = meetingRow ? {
+    title: meetingRow.title,
+    user_id: meetingRow.user_id,
+    expert_name: meetingRow.expert_name,
+  } : null
+
+  return { ok: true, code: 'ok', booking, meeting }
+}
+
+module.exports = { confirmBooking, cancelBooking, confirmReschedule }
