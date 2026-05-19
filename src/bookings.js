@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken')
 const crypto = require('crypto')
 const { DateTime } = require('luxon')
 // getGoogleBusy: занятость коуча из Google (FreeBusy). При сбое → [] (бронь не блокируется ложно)
-const { getGoogleBusy } = require('./integrations')
+const { getGoogleBusy, createBookingEvent } = require('./integrations')
 const { notifyNewBooking, notifyBookingCancelled, notifyRescheduleRequest } = require('./telegram')
 const { sendBookingConfirmation, sendCoachNotification, sendBookingCancelledByCoachEmail, sendBookingRescheduleRequestByCoachEmail } = require('./email')
 
@@ -121,6 +121,23 @@ router.post('/', async (req, res) => {
     if (!requireConfirm) {
       sendBookingConfirmation(client_email, client_name, meeting.title, date, time, videoLink, meeting.expert_name, clientToken)
     }
+
+    // Google-запись брони (Шаг 3b): пишем событие в наш изолированный календарь
+    // "kogDA" внутри Google коуча. Без await — это побочный эффект, не критический
+    // путь. Функция сама ловит все ошибки и возвращает { ok:false } вместо throw,
+    // поэтому try/catch не нужен. Если Google не подключён, не работает или
+    // вернул 4xx/5xx — бронь и нотификации уже произошли, клиенту всё ок.
+    createBookingEvent(meeting.user_id, {
+      summary: meeting.title,
+      description: `Клиент: ${client_name}\nЗапись через kogDA`,
+      startISO: startTime.toISOString(),
+      endISO: endTime.toISOString(),
+      timezone: clientTz,
+    }).then(result => {
+      if (!result.ok) {
+        console.error(`[booking ${booking.id}] Google event skip: ${result.reason}`)
+      }
+    })
 
     res.json({ booking, video_link: videoLink })
   } catch (err) {

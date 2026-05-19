@@ -371,6 +371,135 @@ async function getGoogleBusy(userId, timeMinISO, timeMaxISO) {
   }
 }
 
+// --- createBookingEvent(userId, opts) ---
+// Создаёт событие в Google-календаре коуча для свежей брони kogDA.
+// Пишем в ОТДЕЛЬНЫЙ календарь "kogDA" внутри Google коуча — scope
+// calendar.app.created физически не пускает нас в его личный календарь.
+//
+// Поиск календаря: по id из БД (колонка google_calendar_id), НЕ по имени.
+// Если коуч переименует наш календарь — мы всё равно его найдём.
+// Если коуч удалит наш календарь — Google вернёт 404, мы создадим заново
+// и перезапишем id в БД.
+//
+// opts: { summary, startISO, endISO, timezone, description }
+//
+// Возвращает:
+//   { ok:true, eventId, calendarId }      — успех
+//   { ok:false, reason:'no_token' }       — Google не подключён / refresh умер
+//   { ok:false, reason:'error' }          — любая другая проблема
+//
+// КОНТРАКТ: функция НИКОГДА не бросает. Любая ошибка ловится внутри.
+async function createBookingEvent(userId, opts) {
+  try {
+    const { summary, startISO, endISO, timezone, description } = opts || {}
+
+    const accessToken = await getFreshAccessToken(userId)
+    if (!accessToken) {
+      return { ok: false, reason: 'no_token' }
+    }
+
+    // Один запрос к Google с таймаутом 5с. НЕ бросает на не-2xx —
+    // возвращает result-объект, чтобы внешний код мог различать 404
+    // (нашего календаря больше нет) от других ошибок (403, 5xx и т.п.).
+    async function gFetch(url, init) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 5000)
+      try {
+        const resp = await fetch(url, {
+          ...init,
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            ...(init && init.headers ? init.headers : {}),
+          },
+          signal: controller.signal,
+        })
+        const text = await resp.text()
+        let data = null
+        try { data = text ? JSON.parse(text) : null } catch {}
+        return { ok: resp.ok, status: resp.status, data, raw: text }
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+
+    // Запись события в конкретный календарь (используется и для существующего,
+    // и для свежесозданного — поэтому вынесли).
+    function postEvent(calendarId) {
+      return gFetch(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            summary: summary || 'kogDA',
+            description: description || '',
+            start: { dateTime: startISO, timeZone: timezone },
+            end:   { dateTime: endISO,   timeZone: timezone },
+          }),
+        }
+      )
+    }
+
+    // 1) Берём сохранённый id нашего календаря из БД.
+    const rowRes = await pool.query(
+      `SELECT google_calendar_id FROM calendar_connections
+        WHERE user_id = $1 AND provider = 'google'`,
+      [userId]
+    )
+    let calendarId = rowRes.rows[0]?.google_calendar_id || null
+    let needCreate = !calendarId
+
+    // 2) Если id есть — сразу пробуем создать событие.
+    if (calendarId) {
+      const r = await postEvent(calendarId)
+      if (r.ok && r.data?.id) {
+        return { ok: true, eventId: r.data.id, calendarId }
+      }
+      if (r.status === 404) {
+        // Календарь удалён коучем вручную в Google — пересоздадим
+        needCreate = true
+        calendarId = null
+      } else {
+        throw new Error(`Google events POST ${r.status}: ${(r.raw || '').slice(0, 200)}`)
+      }
+    }
+
+    // 3) Создаём новый календарь "kogDA" (первая бронь ИЛИ старый удалён).
+    if (needCreate) {
+      const c = await gFetch('https://www.googleapis.com/calendar/v3/calendars', {
+        method: 'POST',
+        body: JSON.stringify({ summary: 'kogDA' }),
+      })
+      if (!c.ok || !c.data?.id) {
+        throw new Error(`Google calendars POST ${c.status}: ${(c.raw || '').slice(0, 200)}`)
+      }
+      calendarId = c.data.id
+
+      // СРАЗУ пишем id в БД — защита от дублей. Если шаг создания события
+      // ниже упадёт, при следующей брони мы найдём этот id и попробуем
+      // снова, а не создадим ещё один календарь.
+      await pool.query(
+        `UPDATE calendar_connections
+            SET google_calendar_id = $1, updated_at = NOW()
+          WHERE user_id = $2 AND provider = 'google'`,
+        [calendarId, userId]
+      )
+
+      // 4) Создаём событие в свежем календаре.
+      const e = await postEvent(calendarId)
+      if (!e.ok || !e.data?.id) {
+        throw new Error(`Google events POST (new cal) ${e.status}: ${(e.raw || '').slice(0, 200)}`)
+      }
+      return { ok: true, eventId: e.data.id, calendarId }
+    }
+
+    throw new Error('createBookingEvent: непредвиденная ветка')
+  } catch (err) {
+    console.error(`createBookingEvent error (user ${userId}):`, err.message)
+    return { ok: false, reason: 'error' }
+  }
+}
+
 // =========================================================
 // GET /integrations/google/busy?from=ISO&to=ISO
 // Занятость коуча из его Google за период — для КАЛЕНДАРЯ КОУЧА
@@ -443,3 +572,4 @@ router.get('/_debug/freebusy', auth, async (req, res) => {
 module.exports = router
 module.exports.getFreshAccessToken = getFreshAccessToken
 module.exports.getGoogleBusy = getGoogleBusy
+module.exports.createBookingEvent = createBookingEvent
