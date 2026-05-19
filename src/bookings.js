@@ -99,10 +99,10 @@ router.post('/', async (req, res) => {
 
     const bookingStatus = requireConfirm ? 'pending' : 'confirmed'
     const result = await pool.query(
-      `INSERT INTO bookings 
-       (meeting_type_id, client_name, client_email, notes, start_time, end_time, status, video_link, client_token) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [meeting_type_id, client_name, client_email, notes, startTime, endTime, bookingStatus, videoLink, clientToken]
+      `INSERT INTO bookings
+       (meeting_type_id, client_name, client_email, notes, start_time, end_time, status, video_link, client_token, client_timezone)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [meeting_type_id, client_name, client_email, notes, startTime, endTime, bookingStatus, videoLink, clientToken, clientTz]
     )
 
     const booking = result.rows[0]
